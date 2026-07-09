@@ -6,6 +6,7 @@ import {
   TrendingUp, DollarSign, BarChart3, AlertTriangle,
   ShieldCheck, PieChart, Activity, Target
 } from "lucide-react";
+import EvidencePanel from "@/components/evidence-panel";
 
 interface Insight {
   category: string;
@@ -145,6 +146,7 @@ export default function FinancialIntelligence({ data }: { data: FinancialIntelli
             </div>
 
             <p className="text-xs text-[#71717a] italic">{insight.benchmark_context}</p>
+            {(insight as any).evidence && <EvidencePanel evidence={(insight as any).evidence} />}
           </motion.div>
         ))}
       </div>

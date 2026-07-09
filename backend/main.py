@@ -14,6 +14,7 @@ from audit_engine import audit_workbook
 from company_diff import build_company_diff, get_available_diff_pairs, get_demo_diff
 from company_intelligence import build_company_profile, get_company_industries, get_demo_profile
 from confidence_analyzer import get_confidence_profile, get_available_confidence_scenarios
+from evidence_explorer import enrich_insights, get_evidence
 from financial_intelligence import analyze_scenario, get_available_scenarios
 from mock import get_demo_audit_result
 from models import AuditResult, HealthCheck
@@ -82,6 +83,30 @@ def confidence(scenario: str) -> dict:
         return {"scenario": scenario, "categories": get_confidence_profile(scenario)}
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/evidence/{mode}/{scenario}")
+def evidence(mode: str, scenario: str) -> dict:
+    """Return evidence-enriched insights for any analysis mode."""
+    valid_modes = ["fi", "ci", "diff"]
+    if mode not in valid_modes:
+        raise HTTPException(status_code=400, detail=f"Invalid mode. Use: {valid_modes}")
+    
+    if mode == "fi":
+        from financial_intelligence import analyze_scenario
+        result = analyze_scenario(scenario)
+        result["insights"] = enrich_insights("fi", scenario, result["insights"])
+        return result
+    elif mode == "ci":
+        from company_intelligence import get_demo_profile
+        result = get_demo_profile(scenario)
+        result["insights"] = enrich_insights("ci", scenario, result.get("insights", []))
+        return result
+    else:
+        from company_diff import get_demo_diff
+        result = get_demo_diff(scenario)
+        result["changes"] = enrich_insights("diff", scenario, result.get("changes", []))
+        return result
 
 
 @app.get("/api/diff-pairs")
