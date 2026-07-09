@@ -11,6 +11,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from audit_engine import audit_workbook
+from company_diff import build_company_diff, get_available_diff_pairs, get_demo_diff
 from company_intelligence import build_company_profile, get_company_industries, get_demo_profile
 from financial_intelligence import analyze_scenario, get_available_scenarios
 from mock import get_demo_audit_result
@@ -69,6 +70,19 @@ def company_demo(industry: str) -> dict:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/api/diff-pairs")
+def diff_pairs() -> dict[str, list[str]]:
+    return {"pairs": get_available_diff_pairs()}
+
+
+@app.get("/api/demo-diff/{pair}")
+def demo_diff(pair: str) -> dict:
+    try:
+        return get_demo_diff(pair)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.get("/api/analyze/{scenario}")
 def analyze(scenario: str) -> dict:
     try:
@@ -102,6 +116,43 @@ async def analyze_company(file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=500, detail=f"Failed to analyze company PDF: {exc}") from exc
     finally:
         await file.close()
+
+
+@app.post("/api/company-diff")
+async def company_diff(file_a: UploadFile = File(...), file_b: UploadFile = File(...)) -> dict:
+    for file in (file_a, file_b):
+        if not file.filename or not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only .pdf files are supported.")
+
+    safe_name_a = Path(file_a.filename).name
+    safe_name_b = Path(file_b.filename).name
+    destination_a = UPLOAD_DIR / f"{uuid4().hex}_{safe_name_a}"
+    destination_b = UPLOAD_DIR / f"{uuid4().hex}_{safe_name_b}"
+
+    try:
+        with destination_a.open("wb") as buffer:
+            shutil.copyfileobj(file_a.file, buffer)
+        with destination_b.open("wb") as buffer:
+            shutil.copyfileobj(file_b.file, buffer)
+
+        parsed_a = {
+            "text": extract_text(destination_a),
+            "tables": extract_tables(destination_a),
+            "financial_data": extract_financial_data(destination_a),
+        }
+        parsed_b = {
+            "text": extract_text(destination_b),
+            "tables": extract_tables(destination_b),
+            "financial_data": extract_financial_data(destination_b),
+        }
+        return build_company_diff(parsed_a, parsed_b)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to compare company PDFs: {exc}") from exc
+    finally:
+        await file_a.close()
+        await file_b.close()
 
 
 @app.post("/api/upload", response_model=AuditResult)
