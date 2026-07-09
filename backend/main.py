@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from audit_engine import audit_workbook
 from company_diff import build_company_diff, get_available_diff_pairs, get_demo_diff
 from company_intelligence import build_company_profile, get_company_industries, get_demo_profile
+from confidence_analyzer import get_confidence_profile, get_available_confidence_scenarios
 from financial_intelligence import analyze_scenario, get_available_scenarios
 from mock import get_demo_audit_result
 from models import AuditResult, HealthCheck
@@ -66,6 +67,19 @@ def company_industries() -> list[str]:
 def company_demo(industry: str) -> dict:
     try:
         return get_demo_profile(industry)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/confidence-scenarios")
+def confidence_scenarios() -> dict[str, list[str]]:
+    return {"scenarios": get_available_confidence_scenarios()}
+
+
+@app.get("/api/confidence/{scenario}")
+def confidence(scenario: str) -> dict:
+    try:
+        return {"scenario": scenario, "categories": get_confidence_profile(scenario)}
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
