@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import Link from "next/link";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { AuditScore, SeverityGrid, IssueTable, IssueModal, SummaryCard } from "@/components/audit-dashboard";
+import ExportReport from "@/components/export-report";
 
 interface Issue {
   id: string;
@@ -83,6 +84,7 @@ export default function DemoPage() {
         <SeverityGrid breakdown={data.severity_breakdown} />
         <SummaryCard summary={data.summary} />
         <IssueTable issues={data.issues} onSelect={setSelectedIssue} />
+        <ExportReport result={data} />
       </motion.div>
 
       <IssueModal issue={selectedIssue} open={!!selectedIssue} onClose={() => setSelectedIssue(null)} />
