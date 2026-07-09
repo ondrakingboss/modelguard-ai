@@ -11,6 +11,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from audit_engine import audit_workbook
+from financial_intelligence import analyze_scenario, get_available_scenarios
 from mock import get_demo_audit_result
 from models import AuditResult, HealthCheck
 from parser import parse_excel_file
@@ -46,6 +47,19 @@ def health_check() -> HealthCheck:
 @app.get("/api/demo", response_model=AuditResult)
 def demo() -> AuditResult:
     return get_demo_audit_result()
+
+
+@app.get("/api/scenarios")
+def scenarios() -> dict[str, list[str]]:
+    return {"scenarios": get_available_scenarios()}
+
+
+@app.get("/api/analyze/{scenario}")
+def analyze(scenario: str) -> dict:
+    try:
+        return analyze_scenario(scenario)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/api/upload", response_model=AuditResult)
