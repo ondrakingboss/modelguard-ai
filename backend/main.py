@@ -11,10 +11,12 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from audit_engine import audit_workbook
+from company_intelligence import build_company_profile, get_company_industries, get_demo_profile
 from financial_intelligence import analyze_scenario, get_available_scenarios
 from mock import get_demo_audit_result
 from models import AuditResult, HealthCheck
 from parser import parse_excel_file
+from pdf_parser import extract_financial_data, extract_tables, extract_text
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -54,12 +56,52 @@ def scenarios() -> dict[str, list[str]]:
     return {"scenarios": get_available_scenarios()}
 
 
+@app.get("/api/company-industries")
+def company_industries() -> list[str]:
+    return get_company_industries()
+
+
+@app.get("/api/company-demo/{industry}")
+def company_demo(industry: str) -> dict:
+    try:
+        return get_demo_profile(industry)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.get("/api/analyze/{scenario}")
 def analyze(scenario: str) -> dict:
     try:
         return analyze_scenario(scenario)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/analyze-company")
+async def analyze_company(file: UploadFile = File(...)) -> dict:
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only .pdf files are supported.")
+
+    safe_name = Path(file.filename).name
+    stored_name = f"{uuid4().hex}_{safe_name}"
+    destination = UPLOAD_DIR / stored_name
+
+    try:
+        with destination.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        parsed_pdf = {
+            "text": extract_text(destination),
+            "tables": extract_tables(destination),
+            "financial_data": extract_financial_data(destination),
+        }
+        return build_company_profile(parsed_pdf)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to analyze company PDF: {exc}") from exc
+    finally:
+        await file.close()
 
 
 @app.post("/api/upload", response_model=AuditResult)
