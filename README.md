@@ -162,4 +162,49 @@ Open `http://localhost:3000` — click **Try Demo** for an instant audit preview
 
 ---
 
+## Deployment
+
+### Frontend (Vercel)
+```bash
+cd frontend
+vercel login        # Interactive browser OAuth required
+vercel --prod       # Deploys with vercel.json config
+```
+Set environment variable: `NEXT_PUBLIC_API_URL=https://your-backend.onrender.com`
+
+### Backend (Render / Railway)
+```bash
+cd backend
+# Render: connect GitHub repo → set build command: pip install -r requirements.txt
+# Start command: uvicorn main:app --host 0.0.0.0 --port $PORT
+```
+CORS configured in main.py — update `allow_origins` with production frontend URL.
+
+### Local Development
+```bash
+# Backend
+cd backend && source venv/bin/activate && uvicorn main:app --port 8000
+# Frontend (new terminal)
+cd frontend && npm run dev
+```
+
+## QA Verification (2026-07-09)
+
+| Check | Result |
+|---|---|
+| 9 API endpoints | All 200 OK |
+| Frontend build | 11/11 pages, zero errors |
+| accessibility | `rel="noopener noreferrer"` on external links |
+| Security audit | No API keys exposed, GAAP-only data, source URLs verified |
+
+### Known Limitations
+- Screen capture MCP tool broken — screenshots require manual browser capture
+- Backend deploy requires Render/Railway account (browser setup)
+- Vercel deploy requires `vercel login` (browser OAuth)
+- Real peer data only for SaaS industry (10 companies)
+- No authentication — demo-only deployment
+- sound MCP broken — no audio feedback on flex
+
+---
+
 *Built as a fintech portfolio project demonstrating full-stack engineering, financial domain knowledge, and UI/UX design.*
