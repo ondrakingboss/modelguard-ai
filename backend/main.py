@@ -19,6 +19,7 @@ from financial_intelligence import analyze_scenario, get_available_scenarios
 from mock import get_demo_audit_result
 from models import AuditResult, HealthCheck
 from parser import parse_excel_file
+from peer_benchmark import get_benchmark, get_available_industries
 from pdf_parser import extract_financial_data, extract_tables, extract_text
 
 
@@ -62,6 +63,19 @@ def scenarios() -> dict[str, list[str]]:
 @app.get("/api/company-industries")
 def company_industries() -> list[str]:
     return get_company_industries()
+
+
+@app.get("/api/benchmark-industries")
+def benchmark_industries() -> dict[str, list[str]]:
+    return {"industries": get_available_industries()}
+
+
+@app.get("/api/benchmark/{industry}")
+def benchmark(industry: str) -> dict:
+    try:
+        return get_benchmark(industry)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/company-demo/{industry}")
