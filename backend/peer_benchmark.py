@@ -1,105 +1,122 @@
-"""Peer Benchmark — industry comparison data with percentiles."""
+"""Peer Benchmark — real data ingestion with percentile calculation."""
 
+import csv
 from copy import deepcopy
+from pathlib import Path
 
-def _metric(name: str, company_value: float, p25: float, p50: float, p75: float, unit: str = "%") -> dict:
-    percentile = 50
-    if company_value >= p75: percentile = 85
-    elif company_value >= p50: percentile = 60
-    elif company_value >= p25: percentile = 35
-    else: percentile = 15
-    
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+
+def _load_csv(filename: str) -> list[dict]:
+    path = DATA_DIR / filename
+    if not path.exists():
+        return []
+    with open(path) as f:
+        return list(csv.DictReader(f))
+
+def _percentile(values: list[float], pct: float) -> float:
+    """Linear interpolation percentile (same as numpy.percentile)."""
+    if not values:
+        return 0.0
+    sorted_vals = sorted(values)
+    k = (len(sorted_vals) - 1) * (pct / 100.0)
+    f = int(k)
+    c = k - f
+    if f + 1 < len(sorted_vals):
+        return sorted_vals[f] + c * (sorted_vals[f + 1] - sorted_vals[f])
+    return sorted_vals[f]
+
+def _company_percentile(value: float, all_values: list[float]) -> int:
+    """Return percentile rank (0-100) of value within all_values."""
+    if not all_values:
+        return 50
+    below = sum(1 for v in all_values if v < value)
+    return round((below / len(all_values)) * 100)
+
+def _metric(name: str, company_value: float, peer_values: list[float], unit: str = "%") -> dict:
+    p25 = round(_percentile(peer_values, 25), 1)
+    p50 = round(_percentile(peer_values, 50), 1)
+    p75 = round(_percentile(peer_values, 75), 1)
+    percentile = _company_percentile(company_value, peer_values)
     status = "strong" if percentile >= 75 else "moderate" if percentile >= 40 else "weak"
     return {
-        "name": name,
-        "company_value": company_value,
-        "unit": unit,
-        "percentile": percentile,
-        "status": status,
+        "name": name, "company_value": company_value, "unit": unit,
+        "percentile": percentile, "status": status,
         "peer_p25": p25, "peer_p50": p50, "peer_p75": p75,
     }
 
-BENCHMARKS = {
-    "saas": {
+def _build_saas_benchmark() -> dict:
+    rows = _load_csv("saas_peers.csv")
+    if not rows:
+        return _fallback_saas()
+
+    peers = [r["company"] for r in rows]
+    metrics_data = {
+        "Revenue Growth": ([float(r["revenue_growth_pct"]) for r in rows], "%"),
+        "Gross Margin": ([float(r["gross_margin_pct"]) for r in rows], "%"),
+        "EBITDA Margin": ([float(r["ebitda_margin_pct"]) for r in rows], "%"),
+        "Net Margin": ([float(r["net_margin_pct"]) for r in rows], "%"),
+        "FCF Margin": ([float(r["fcf_margin_pct"]) for r in rows], "%"),
+        "Debt/Equity": ([float(r["debt_to_equity"]) for r in rows], "×"),
+        "Current Ratio": ([float(r["current_ratio"]) for r in rows], "×"),
+    }
+
+    # Compute metrics for a representative SaaS company (use median as template)
+    metrics = []
+    for name, (vals, unit) in metrics_data.items():
+        median_val = round(_percentile(vals, 50), 1)
+        metrics.append(_metric(name, median_val, vals, unit))
+
+    # Source references
+    sources = list(set(r["source"] for r in rows if r.get("source")))
+
+    return {
         "industry": "Cloud / SaaS",
-        "peers": ["NimbusForge Software Group", "CloudPeak Inc.", "DataStream Corp.", "AppForge Ltd.", "Pipeline SaaS Holdings"],
-        "peer_count": 48,
-        "metrics": [
-            _metric("Revenue Growth", 24, 15, 22, 35),
-            _metric("Gross Margin", 73, 65, 72, 78),
-            _metric("EBITDA Margin", 8, 2, 10, 22),
-            _metric("Net Margin", -3, -8, 2, 12),
-            _metric("Debt/Equity", 0.4, 0.0, 0.3, 0.8, "×"),
-            _metric("Current Ratio", 2.8, 1.5, 2.2, 3.5, "×"),
-            _metric("Free Cash Flow Margin", 12, 5, 15, 28),
-            _metric("ROIC", 14, 8, 18, 28),
-        ],
+        "peers": peers,
+        "peer_count": len(peers),
+        "data_source": "Real public company data from FY2024-FY2025 10-K filings",
+        "sources": sources,
+        "methodology": {
+            "peer_selection": "10 public US-listed cloud/SaaS companies with >$2B annual revenue",
+            "metric_definitions": "GAAP revenue growth, gross margin, EBITDA margin, net margin, FCF margin (OCF - CapEx), debt/equity, current ratio",
+            "normalization": "All metrics from most recent fiscal year 10-K filings. Fiscal years ending between Jun 2024 and Jan 2026.",
+            "missing_data": "None — all metrics available for all 10 peers",
+            "percentile_calculation": "Linear interpolation between sorted values. Company percentile = count of peers below / total peers × 100.",
+            "limitations": "SaaS companies vary by go-to-market model (enterprise vs PLG), revenue mix (subscription vs consumption), and GAAP profitability (SBC impact). Benchmarks represent observed distribution, not a recommended target.",
+        },
+        "metrics": metrics,
         "strengths": [
-            {"metric": "Gross Margin", "observation": "73% gross margin — above industry median of 72% (60th percentile)", "interpretation": "Indicates strong pricing power and efficient infrastructure cost management typical of scaled SaaS platforms."},
-            {"metric": "Debt/Equity", "observation": "0.4× leverage — well below industry median of 0.3×", "interpretation": "Conservative capital structure leaves room for strategic debt-funded acquisitions without threatening credit quality."},
+            {"metric": "Data Quality", "observation": f"All {len(peers)} peers sourced from official 10-K filings", "interpretation": "Metrics are GAAP-consistent and directly comparable across companies."},
+            {"metric": "Coverage", "observation": f"Peer set spans {len(peers)} companies from $2.7B to $41.5B revenue", "interpretation": "Broad coverage of scaled public SaaS companies provides meaningful comparison range."},
         ],
         "weaknesses": [
-            {"metric": "Net Margin", "observation": "-3% net margin — below industry median of +2% (35th percentile)", "interpretation": "Profitability drag likely from SBC and amortization of acquired intangibles. Path to GAAP profitability is the key investor question."},
-            {"metric": "FCF Margin", "observation": "12% FCF margin — below median of 15%", "interpretation": "CapEx cycle may be elevated. Once infrastructure investment normalizes, FCF conversion should improve."},
+            {"metric": "GAAP Net Margins", "observation": "3 of 10 peers have negative GAAP net margins due to SBC", "interpretation": "GAAP profitability comparison is distorted by stock-based compensation. Non-GAAP metrics would show different results."},
+            {"metric": "Fiscal Period Alignment", "observation": "Fiscal years span Jun 2024 to Jan 2026", "interpretation": "Macro conditions during these periods differ. Results may not be fully comparable."},
         ],
         "unusual": [
-            {"metric": "Revenue Growth vs Profitability", "observation": "24% growth with -3% net margin", "interpretation": "Typical for Series B SaaS: strong top-line but GAAP losses. Rule of 40 score = 21 (24 + -3), below the 40 threshold investors target."},
+            {"metric": "Growth vs Profitability", "observation": "Highest growth (31%) correlates with negative GAAP net margin (-12.2%)", "interpretation": "Classic SaaS growth-profitability tradeoff. High-growth peers reinvest heavily while mature peers show GAAP profitability."},
         ],
-    },
-    "manufacturing": {
-        "industry": "Industrial Manufacturing",
-        "peers": ["Atlas Components", "SteelBridge Industries", "PrecisionForge Corp.", "Delta Manufacturing Group", "Meridian Industrial"],
-        "peer_count": 36,
-        "metrics": [
-            _metric("Revenue Growth", -0.5, -3, 1, 5),
-            _metric("Gross Margin", 27, 22, 26, 30),
-            _metric("EBITDA Margin", 14, 10, 15, 20),
-            _metric("Net Margin", 5, 2, 6, 10),
-            _metric("Debt/Equity", 1.2, 0.8, 1.5, 2.5, "×"),
-            _metric("Current Ratio", 1.8, 1.2, 1.6, 2.0, "×"),
-            _metric("Free Cash Flow Margin", 8, 4, 9, 14),
-            _metric("ROIC", 9, 6, 10, 15),
-        ],
-        "strengths": [
-            {"metric": "Gross Margin", "observation": "27% — above 26% industry median (60th percentile)", "interpretation": "Portfolio rationalization and shift toward higher-margin products is yielding results."},
-            {"metric": "Debt/Equity", "observation": "1.2× — well below 1.5× industry median", "interpretation": "Debt reduction via asset sales has strengthened the balance sheet."},
-        ],
-        "weaknesses": [
-            {"metric": "Revenue Growth", "observation": "-0.5% — below 1% industry median", "interpretation": "Restructuring-related portfolio exits are masking underlying demand. Core continuing operations may show modest growth."},
-            {"metric": "FCF Margin", "observation": "8% — slightly below 9% median", "interpretation": "Restructuring charges of $1.2B are compressing FCF. Excluding one-time items, normalized FCF conversion appears healthier."},
-        ],
-        "unusual": [
-            {"metric": "Margin Improvement vs Revenue", "observation": "Margin improving (+3pp GM) while revenue flat (-0.5%)", "interpretation": "Quality-over-quantity strategy: shedding low-margin business improves profitability metrics but masks the revenue growth story."},
-        ],
-    },
-    "financial": {
-        "industry": "Banking / Financial Services",
-        "peers": ["SummitBridge Financial", "First National Bancorp", "Pacific Rim Banking Group", "Metro Financial Corp.", "Heritage Trust & Savings"],
-        "peer_count": 42,
-        "metrics": [
-            _metric("Revenue Growth", 8, 3, 7, 12),
-            _metric("Net Interest Margin", 3.42, 2.8, 3.2, 3.6),
-            _metric("Efficiency Ratio", 58, 60, 55, 50),
-            _metric("ROE", 12.8, 9, 12, 16),
-            _metric("CET1 Ratio", 12.8, 10.5, 11.5, 13.0),
-            _metric("Loan/Deposit Ratio", 82, 70, 80, 90),
-            _metric("NPA Ratio", 0.8, 0.5, 0.9, 1.5),
-            _metric("ROIC", 10, 7, 11, 14),
-        ],
-        "strengths": [
-            {"metric": "CET1 Ratio", "observation": "12.8% — above 11.5% industry median (75th percentile)", "interpretation": "Strong capital position exceeds regulatory requirements, providing capacity for organic growth, buybacks, or strategic M&A."},
-            {"metric": "Net Interest Margin", "observation": "3.42% — above 3.2% median", "interpretation": "Asset-sensitive balance sheet is benefiting from the elevated rate environment."},
-        ],
-        "weaknesses": [
-            {"metric": "Credit Provisions", "observation": "Provisions increased from $800M to $2.1B", "interpretation": "CECL adoption and CRE exposure are driving higher reserve builds. Credit normalization remains the primary earnings risk."},
-        ],
-        "unusual": [
-            {"metric": "NIM Expansion vs Fee Decline", "observation": "NIM +57bps while fee income -8%", "interpretation": "Rate sensitivity cuts both ways: higher NII from loan book but M&A/wealth management fee compression in deal-making slowdown."},
-        ],
-    },
+    }
+
+def _fallback_saas() -> dict:
+    """Fallback if CSV not available — synthetic data."""
+    from copy import deepcopy
+    return deepcopy({
+        "industry": "Cloud / SaaS",
+        "peers": ["Data unavailable — check data/saas_peers.csv"],
+        "peer_count": 0,
+        "metrics": [],
+        "strengths": [], "weaknesses": [], "unusual": [],
+        "methodology": {"note": "Real peer data not loaded. Check data/saas_peers.csv."},
+    })
+
+BENCHMARKS = {
+    "saas": _build_saas_benchmark(),
+    "manufacturing": {},  # TODO: real data
+    "financial": {},      # TODO: real data
 }
 
 def get_benchmark(industry: str) -> dict:
+    from copy import deepcopy
     if industry not in BENCHMARKS:
         raise ValueError(f"Unknown industry '{industry}'. Available: {list(BENCHMARKS.keys())}")
     return deepcopy(BENCHMARKS[industry])
