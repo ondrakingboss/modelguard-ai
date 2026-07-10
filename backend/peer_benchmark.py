@@ -44,30 +44,62 @@ def _metric(name: str, company_value: float, peer_values: list[float], unit: str
         "peer_p25": p25, "peer_p50": p50, "peer_p75": p75,
     }
 
+def _metric_label(name: str) -> str:
+    """Convert snake_case metric name to display label."""
+    labels = {
+        "revenue_growth_pct": "Revenue Growth",
+        "gross_margin_pct": "Gross Margin",
+        "ebitda_margin_pct": "EBITDA Margin",
+        "net_margin_pct": "Net Margin",
+        "fcf_margin_pct": "FCF Margin",
+        "debt_to_equity": "Debt/Equity",
+        "current_ratio": "Current Ratio",
+    }
+    return labels.get(name, name.replace("_", " ").title())
+
 def _build_saas_benchmark() -> dict:
     rows = _load_csv("saas_peers.csv")
     if not rows:
         return _fallback_saas()
 
-    peers = [r["company"] for r in rows]
-    metrics_data = {
-        "Revenue Growth": ([float(r["revenue_growth_pct"]) for r in rows], "%"),
-        "Gross Margin": ([float(r["gross_margin_pct"]) for r in rows], "%"),
-        "EBITDA Margin": ([float(r["ebitda_margin_pct"]) for r in rows], "%"),
-        "Net Margin": ([float(r["net_margin_pct"]) for r in rows], "%"),
-        "FCF Margin": ([float(r["fcf_margin_pct"]) for r in rows], "%"),
-        "Debt/Equity": ([float(r["debt_to_equity"]) for r in rows], "×"),
-        "Current Ratio": ([float(r["current_ratio"]) for r in rows], "×"),
-    }
-
-    # Compute metrics for a representative SaaS company (use median as template)
+    # Group by metric_name
+    metric_groups: dict[str, list[dict]] = {}
+    for r in rows:
+        name = r["metric_name"]
+        if name not in metric_groups:
+            metric_groups[name] = []
+        metric_groups[name].append(r)
+    
+    # Build peer list and sources
+    peers = list(set(r["company_name"] for r in rows))
+    sources = list(set(r["source_url"] for r in rows if r.get("source_url")))
+    quality_flags = list(set(r["data_quality_flag"] for r in rows if r.get("data_quality_flag")))
+    
+    # Unit mapping
+    unit_map = {"percent": "%", "ratio": "×"}
+    
     metrics = []
-    for name, (vals, unit) in metrics_data.items():
+    source_detail = []
+    for name, group in metric_groups.items():
+        vals = [float(r["normalized_value"]) for r in group]
+        unit = unit_map.get(group[0].get("reported_unit", "percent"), "%")
         median_val = round(_percentile(vals, 50), 1)
-        metrics.append(_metric(name, median_val, vals, unit))
-
-    # Source references
-    sources = list(set(r["source"] for r in rows if r.get("source")))
+        metrics.append(_metric(_metric_label(name), median_val, vals, unit))
+        
+        # Build detailed source rows for UI
+        for r in group:
+            source_detail.append({
+                "company": r["company_name"], "ticker": r["ticker"],
+                "fiscal_year": r["fiscal_year"], "filing_type": r["filing_type"],
+                "metric": _metric_label(name),
+                "reported_value": r["reported_value"],
+                "reported_unit": r["reported_unit"],
+                "normalized_value": float(r["normalized_value"]),
+                "gaap_or_non_gaap": r["gaap_or_non_gaap"],
+                "source_section": r.get("source_page_or_section", ""),
+                "formula": r.get("calculation_formula", ""),
+                "quality_flag": r.get("data_quality_flag", ""),
+            })
 
     return {
         "industry": "Cloud / SaaS",
@@ -75,6 +107,8 @@ def _build_saas_benchmark() -> dict:
         "peer_count": len(peers),
         "data_source": "Real public company data from FY2024-FY2025 10-K filings",
         "sources": sources,
+        "quality_flags": quality_flags,
+        "source_detail": source_detail,
         "methodology": {
             "peer_selection": "10 public US-listed cloud/SaaS companies with >$2B annual revenue",
             "metric_definitions": "GAAP revenue growth, gross margin, EBITDA margin, net margin, FCF margin (OCF - CapEx), debt/equity, current ratio",
