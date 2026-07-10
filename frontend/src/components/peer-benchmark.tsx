@@ -159,7 +159,7 @@ export default function PeerBenchmark({ data }: { data: Benchmark }) {
                     <td className="p-2">{statusBadge(r.inclusion_status)}</td>
                     <td className="p-2">{r.quality_flag ? <span className="text-[#f59e0b]">{r.quality_flag.replace(/_/g, " ")}</span> : <span className="text-[#71717a]">—</span>}</td>
                     <td className="p-2">
-                      {r.source_url ? <a href={r.source_url} target="_blank" className="text-[#3b82f6] hover:underline inline-flex items-center gap-1"><ExternalLink className="w-3 h-3" />{r.source_section || "SEC Filing"}</a> : <span className="text-[#71717a]">—</span>}
+                      {r.source_url ? <a href={r.source_url} target="_blank" rel="noopener noreferrer" className="text-[#3b82f6] hover:underline inline-flex items-center gap-1"><ExternalLink className="w-3 h-3" />{r.source_section || "SEC Filing"}</a> : <span className="text-[#71717a]">—</span>}
                     </td>
                   </tr>
                 ))}
