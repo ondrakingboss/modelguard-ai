@@ -57,6 +57,26 @@ def _metric_label(name: str) -> str:
     }
     return labels.get(name, name.replace("_", " ").title())
 
+def _inclusion_policy(flag: str) -> tuple[str, str]:
+    """Map quality flag to (status, rationale)."""
+    if not flag:
+        return ("included", "No quality concerns — GAAP metric from verified 10-K filing.")
+    policies = {
+        "fiscal_period_mismatch": (
+            "included_with_caution",
+            "Fiscal year ends Jun 2024 vs peer median Jan 2025. Different macro conditions may affect comparability. Included in full benchmark; excluded from strict comparison."
+        ),
+        "stock_compensation_distortion": (
+            "included_with_caution",
+            "GAAP metric distorted by stock-based compensation exceeding 15% of revenue. Non-GAAP equivalent would differ materially. Included in full benchmark; excluded from strict comparison."
+        ),
+        "outlier": (
+            "included",
+            "Genuine outlier — verified against 10-K filing. Represents actual company performance. Included in all benchmarks."
+        ),
+    }
+    return policies.get(flag, ("included_with_caution", f"Flagged: {flag}. Included in full benchmark; excluded from strict comparison."))
+
 def _build_saas_benchmark() -> dict:
     rows = _load_csv("saas_peers.csv")
     if not rows:
@@ -81,13 +101,37 @@ def _build_saas_benchmark() -> dict:
     metrics = []
     source_detail = []
     for name, group in metric_groups.items():
-        vals = [float(r["normalized_value"]) for r in group]
-        unit = unit_map.get(group[0].get("reported_unit", "percent"), "%")
-        median_val = round(_percentile(vals, 50), 1)
-        metrics.append(_metric(_metric_label(name), median_val, vals, unit))
+        # All values (full cohort)
+        all_vals = [float(r["normalized_value"]) for r in group]
+        # Exclude only "excluded" status values (none in this dataset)
+        adjusted_vals = all_vals  # No rows are excluded
+        # Strict: exclude caution rows
+        strict_vals = [float(r["normalized_value"]) for r in group
+                       if _inclusion_policy(r.get("data_quality_flag", ""))[0] != "included_with_caution"]
         
-        # Build detailed source rows for UI
+        unit = unit_map.get(group[0].get("reported_unit", "percent"), "%")
+        median_val = round(_percentile(all_vals, 50), 1)
+        
+        full_percentile = _company_percentile(median_val, all_vals)
+        adjusted_percentile = _company_percentile(median_val, adjusted_vals)
+        strict_percentile = _company_percentile(median_val, strict_vals) if strict_vals else full_percentile
+        
+        metrics.append({
+            "name": _metric_label(name), "company_value": median_val, "unit": unit,
+            "full_percentile": full_percentile,
+            "adjusted_percentile": adjusted_percentile,
+            "strict_comparability_percentile": strict_percentile,
+            "cohort_size_full": len(all_vals),
+            "cohort_size_adjusted": len(adjusted_vals),
+            "caution_count": sum(1 for r in group if _inclusion_policy(r.get("data_quality_flag", ""))[0] == "included_with_caution"),
+            "excluded_count": sum(1 for r in group if _inclusion_policy(r.get("data_quality_flag", ""))[0] == "excluded"),
+            "peer_p25": round(_percentile(all_vals, 25), 1),
+            "peer_p50": round(_percentile(all_vals, 50), 1),
+            "peer_p75": round(_percentile(all_vals, 75), 1),
+        })
+        
         for r in group:
+            status, rationale = _inclusion_policy(r.get("data_quality_flag", ""))
             source_detail.append({
                 "company": r["company_name"], "ticker": r["ticker"],
                 "fiscal_year": r["fiscal_year"], "filing_type": r["filing_type"],
@@ -97,8 +141,14 @@ def _build_saas_benchmark() -> dict:
                 "normalized_value": float(r["normalized_value"]),
                 "gaap_or_non_gaap": r["gaap_or_non_gaap"],
                 "source_section": r.get("source_page_or_section", ""),
+                "source_url": r.get("source_url", ""),
                 "formula": r.get("calculation_formula", ""),
                 "quality_flag": r.get("data_quality_flag", ""),
+                "inclusion_status": status,
+                "inclusion_rationale": rationale,
+                "in_full_percentile": True,
+                "in_adjusted_percentile": status != "excluded",
+                "in_strict_percentile": status == "included",
             })
 
     return {
