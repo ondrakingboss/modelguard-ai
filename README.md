@@ -208,3 +208,10 @@ cd frontend && npm run dev
 ---
 
 *Built as a fintech portfolio project demonstrating full-stack engineering, financial domain knowledge, and UI/UX design.*
+
+## Live Demo
+
+- **Frontend:** https://modelguard-ai.vercel.app
+- **Backend API:** https://modelguard-ai.onrender.com
+- **Demo Dashboard:** https://modelguard-ai.vercel.app/demo
+- **Benchmark:** https://modelguard-ai.vercel.app/benchmark
