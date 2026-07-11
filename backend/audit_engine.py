@@ -18,9 +18,11 @@ EXTERNAL_LINK_RE = re.compile(r"\[[^\]]+\.(?:xlsx|xlsm|xlsb|xls)\]", re.IGNORECA
 CELL_REF_RE = re.compile(r"(?<![A-Z0-9_])\$?([A-Z]{1,3})\$?([1-9][0-9]*)(?![A-Z0-9_])", re.IGNORECASE)
 NUMBER_RE = re.compile(r"(?<![A-Z])[-+]?\d+(?:\.\d+)?%?")
 ONLY_NUMBERS_OPERATORS_RE = re.compile(r"^=\s*[-+*/().,\s\d%]+$")
+TRIVIAL_CONSTANTS = {0.0, 1.0, -1.0, 100.0, -100.0}
 REVENUE_RE = re.compile(r"revenue|sales|turnover", re.IGNORECASE)
 MARGIN_RE = re.compile(r"margin|gross margin|ebitda margin|operating margin", re.IGNORECASE)
 CASH_FLOW_RE = re.compile(r"cash flow|cashflow|cash balance|running cash|ending cash", re.IGNORECASE)
+ASSUMPTION_LABEL_RE = re.compile(r"growth|rate|margin|cost|price|inflation|wacc|discount|tax|depreciation", re.IGNORECASE)
 
 
 def audit_workbook(parsed: ParsedWorkbook) -> AuditResult:
@@ -35,6 +37,11 @@ def audit_workbook(parsed: ParsedWorkbook) -> AuditResult:
         issues.extend(_detect_inconsistent_neighboring_formulas(worksheet))
         issues.extend(_detect_assumption_gaps(worksheet))
         issues.extend(_detect_business_anomalies(worksheet))
+
+    # Deduplicate before collapsing row noise
+    issues = _dedupe_issues(issues)
+    # Collapse repeated findings across adjacent cells in the same row
+    issues = _collapse_row_noise(issues)
 
     severity_breakdown = Counter(issue.severity for issue in issues)
     breakdown = SeverityBreakdown(
@@ -237,6 +244,9 @@ def _detect_business_anomalies(worksheet: Worksheet) -> list[Issue]:
         if CASH_FLOW_RE.search(label):
             issues.extend(_negative_cash_flow_issues(worksheet, numeric_cells))
 
+        if ASSUMPTION_LABEL_RE.search(label):
+            issues.extend(_assumption_mismatch_issues(worksheet, numeric_cells, label))
+
     return issues
 
 
@@ -246,19 +256,32 @@ def _growth_issues(worksheet: Worksheet, numeric_cells: list[tuple[Cell, float]]
         if previous <= 0:
             continue
         growth = (current - previous) / abs(previous)
-        if growth > 1.0:
-            issues.append(
-                _issue(
-                    severity="high",
-                    sheet=worksheet.title,
-                    cell=current_cell.coordinate,
-                    category="Business Logic",
-                    title="Suspicious revenue growth",
-                    description=f"Revenue grows by {growth:.0%} from {previous_cell.coordinate} to {current_cell.coordinate}.",
-                    why_it_matters="Period-over-period revenue growth above 100% may be valid, but it often indicates a broken link, pasted override, or unsupported forecast assumption.",
-                    suggested_fix="Trace the revenue driver and document the basis for the step change.",
-                )
+        flagged = False
+        if growth > 0.50:
+            desc = f"Revenue grows by {growth:.0%} from {previous_cell.coordinate} to {current_cell.coordinate}."
+            flagged = True
+        elif growth < -0.30:
+            desc = f"Revenue declines by {growth:.0%} from {previous_cell.coordinate} to {current_cell.coordinate}."
+            flagged = True
+        else:
+            continue
+
+        issues.append(
+            _issue(
+                severity="high",
+                sheet=worksheet.title,
+                cell=current_cell.coordinate,
+                category="Business Logic",
+                title="Suspicious revenue growth",
+                description=desc,
+                why_it_matters=(
+                    "Period-over-period revenue changes exceeding 50% growth or -30% decline "
+                    "are rare outside distressed or hyper-growth scenarios. Such jumps often "
+                    "indicate a broken link, pasted override, or unsupported forecast assumption."
+                ),
+                suggested_fix="Trace the revenue driver and document the basis for the step change.",
             )
+        )
     return issues
 
 
@@ -308,12 +331,74 @@ def _negative_cash_flow_issues(worksheet: Worksheet, numeric_cells: list[tuple[C
     return issues
 
 
+def _assumption_mismatch_issues(
+    worksheet: Worksheet,
+    numeric_cells: list[tuple[Cell, float]],
+    label: str,
+) -> list[Issue]:
+    """Flag assumption rows where period-over-period changes suggest stale or mismatched inputs."""
+    issues: list[Issue] = []
+    values = [v for _, v in numeric_cells]
+    if len(values) < 3 or all(v == values[0] for v in values):
+        return issues
+
+    # Check for suspiciously static values across periods
+    unique_values = len(set(round(v, 6) for v in values))
+    if unique_values == 1:
+        return issues
+
+    # Flag if a percentage-labeled row has values that look like they should vary but don't
+    for i in range(1, len(values)):
+        change = abs(values[i] - values[i - 1])
+        if values[i - 1] != 0 and change / abs(values[i - 1]) > 1.0:
+            issues.append(
+                _issue(
+                    severity="medium",
+                    sheet=worksheet.title,
+                    cell=numeric_cells[i][0].coordinate,
+                    category="Business Logic",
+                    title="Assumption value jump",
+                    description=(
+                        f"'{label}' changes abruptly at {numeric_cells[i][0].coordinate}. "
+                        f"Previous value: {values[i-1]:.4f}, current: {values[i]:.4f}."
+                    ),
+                    why_it_matters=(
+                        "Assumption values that change dramatically between periods may indicate "
+                        "a copy-paste error, broken link, or undocumented change in methodology."
+                    ),
+                    suggested_fix=(
+                        "Verify whether the change is intentional. If so, document the rationale. "
+                        "If not, restore the consistent assumption series."
+                    ),
+                )
+            )
+            break
+    return issues
+
+
 def _has_hardcoded_constants(formula: str) -> bool:
+    """Return True if formula contains non-trivial hardcoded numbers.
+
+    Trivial constants (0, 1, -1, 100, -100) and standard modeling
+    patterns (percentage conversion, growth formulas) are ignored.
+    """
     if ONLY_NUMBERS_OPERATORS_RE.match(formula):
-        return True
+        numbers = [float(n) for n in NUMBER_RE.findall(formula)]
+        return any(n not in TRIVIAL_CONSTANTS for n in numbers)
 
     without_references = CELL_REF_RE.sub("", formula)
-    return bool(NUMBER_RE.search(without_references))
+    numbers = NUMBER_RE.findall(without_references)
+    if not numbers:
+        return False
+
+    for num_str in numbers:
+        try:
+            num = float(num_str.rstrip("%"))
+        except ValueError:
+            continue
+        if num not in TRIVIAL_CONSTANTS:
+            return True
+    return False
 
 
 def _formula_pattern(formula: str, row: int, column: int) -> str:
@@ -396,6 +481,119 @@ def _dedupe_issues(issues: Iterable[Issue]) -> list[Issue]:
     return unique
 
 
+def _collapse_row_noise(issues: list[Issue]) -> list[Issue]:
+    """Group repeated findings across adjacent cells in the same row.
+
+    If the same rule fires on adjacent cells in the same row for the same
+    category and title, collapse into one grouped finding with a cell range.
+    Individual cells are preserved in the description.
+    """
+    if len(issues) < 3:
+        return issues
+
+    # Group by (sheet, category, title) — find consecutive cell patterns
+    from collections import defaultdict
+    import re as _re
+
+    def _normalize_title(t: str) -> str:
+        """Strip cell references from titles so patterns group correctly."""
+        return _re.sub(r"at [A-Z]+\d+", "at XX", t)
+
+    groups: dict[tuple[str, str, str], list[Issue]] = defaultdict(list)
+    for issue in issues:
+        if not issue.cell:
+            continue
+        key = (issue.sheet, issue.category, _normalize_title(issue.title))
+        groups[key].append(issue)
+
+    collapsed: dict[str, Issue] = {}
+    removed_ids: set[str] = set()
+
+    for key, grouped in groups.items():
+        if len(grouped) < 3:
+            continue
+
+        # Extract cell rows — group by row
+        from collections import defaultdict
+        row_groups: dict[int, list[Issue]] = defaultdict(list)
+        for issue in grouped:
+            row_num = _extract_row(issue.cell)
+            if row_num:
+                row_groups[row_num].append(issue)
+
+        for row_num, row_issues in row_groups.items():
+            if len(row_issues) < 3:
+                continue
+
+            # Sort by column
+            sorted_issues = sorted(row_issues, key=lambda i: _extract_col(i.cell) or 0)
+
+            # Find runs of consecutive columns
+            runs: list[list[Issue]] = []
+            current_run: list[Issue] = [sorted_issues[0]]
+            for i in range(1, len(sorted_issues)):
+                prev_col = _extract_col(sorted_issues[i - 1].cell)
+                curr_col = _extract_col(sorted_issues[i].cell)
+                if prev_col is not None and curr_col is not None and curr_col == prev_col + 1:
+                    current_run.append(sorted_issues[i])
+                else:
+                    if len(current_run) >= 3:
+                        runs.append(current_run)
+                    current_run = [sorted_issues[i]]
+            if len(current_run) >= 3:
+                runs.append(current_run)
+
+            for run in runs:
+                first = run[0]
+                last = run[-1]
+                cells = sorted([i.cell for i in run], key=lambda c: (_extract_col(c) or 0))
+                cell_range = f"{first.sheet}!{cells[0]}:{cells[-1]}"
+                affected_list = ", ".join(cells[:8])
+                if len(cells) > 8:
+                    affected_list += f", ... ({len(cells)} cells total)"
+
+                collapsed_id = f"{first.id}_grouped_{cell_range}"
+                grouped_issue = Issue(
+                    id=collapsed_id,
+                    severity=first.severity,
+                    sheet=first.sheet,
+                    cell=cell_range,
+                    category=first.category,
+                    title=f"{first.title} (×{len(cells)} cells)",
+                    description=(
+                        f"{first.description} Pattern repeats across {len(cells)} "
+                        f"adjacent cells in row {row_num}: {affected_list}."
+                    ),
+                    why_it_matters=first.why_it_matters,
+                    suggested_fix=first.suggested_fix,
+                )
+                collapsed[collapsed_id] = grouped_issue
+                removed_ids.update(i.id for i in run)
+
+    if not collapsed:
+        return issues
+
+    result = [i for i in issues if i.id not in removed_ids]
+    result.extend(collapsed.values())
+    return result
+
+
+def _extract_row(cell_ref: str) -> int | None:
+    """Extract row number from a cell reference like 'B7' or 'A1'."""
+    import re
+    m = re.search(r"(\d+)", cell_ref)
+    return int(m.group(1)) if m else None
+
+
+def _extract_col(cell_ref: str) -> int | None:
+    """Extract column index from a cell reference like 'B7'."""
+    import re
+    m = re.match(r"([A-Z]+)", cell_ref)
+    if not m:
+        return None
+    return _column_index(m.group(1))
+
+
 def _formula_error_issue(worksheet: Worksheet, cell: Cell, error: str) -> Issue:
     return _issue(
         severity="critical",
@@ -436,15 +634,28 @@ def _external_link_issue(worksheet: Worksheet, cell: Cell, formula: str) -> Issu
 
 
 def _circular_reference_issue(worksheet: Worksheet, cell: Cell) -> Issue:
+    cell_ref = f"{get_column_letter(cell.column)}{cell.row}"
+    formula = str(cell.value) if cell.value else ""
     return _issue(
-        severity="critical",
+        severity="high",
         sheet=worksheet.title,
         cell=cell.coordinate,
-        category="Formula Integrity",
-        title="Circular self-reference",
-        description=f"Cell {cell.coordinate} directly references itself.",
-        why_it_matters="Circular references can produce unstable or iteration-dependent outputs.",
-        suggested_fix="Rewrite the formula to remove the self-reference or move iterative logic into a controlled schedule.",
+        category="Circular Reference",
+        title=f"Circular reference at {cell_ref}",
+        description=(
+            f"Cell {cell_ref} directly references itself in formula: {formula}. "
+            "This creates a dependency loop that Excel resolves through iteration, "
+            "producing unstable or iteration-dependent outputs."
+        ),
+        why_it_matters=(
+            "Circular references can produce different results on recalc, mask calculation "
+            "errors, and make the model fragile. They are frequently used to hide modeling "
+            "issues or bypass proper schedule design."
+        ),
+        suggested_fix=(
+            "Rewrite the formula to remove the self-reference. Move iterative logic "
+            "into a controlled schedule with explicit iteration and break conditions."
+        ),
     )
 
 
@@ -462,13 +673,28 @@ def _inconsistent_formula_issue(worksheet: Worksheet, cell: Cell, axis: str) -> 
 
 
 def _score_model(breakdown: SeverityBreakdown) -> int:
-    penalty = (
-        breakdown.critical * 18
-        + breakdown.high * 10
-        + breakdown.medium * 5
-        + breakdown.low * 2
-    )
-    return max(0, min(100, 100 - penalty))
+    """Weighted penalty scoring with caps to prevent noise inflation.
+
+    Critical findings carry heavy weight; medium/low findings are capped
+    so that formula noise doesn't destroy the score on otherwise clean models.
+    """
+    # Weighted penalties per severity
+    critical_penalty = breakdown.critical * 30
+    high_penalty = breakdown.high * 18
+
+    # Cap medium/low — beyond 10 findings, they're likely formula noise
+    medium_effective = min(breakdown.medium, 10)
+    low_effective = min(breakdown.low, 8)
+    medium_penalty = medium_effective * 6
+    low_penalty = low_effective * 2
+
+    # Remaining medium/low past caps still carry reduced weight
+    medium_overflow = max(0, breakdown.medium - 10)
+    low_overflow = max(0, breakdown.low - 8)
+    overflow_penalty = medium_overflow * 2 + low_overflow * 1
+
+    total_penalty = critical_penalty + high_penalty + medium_penalty + low_penalty + overflow_penalty
+    return max(0, min(100, 100 - total_penalty))
 
 
 def _summary_for(score: int, issue_count: int, breakdown: SeverityBreakdown) -> str:

@@ -7,13 +7,14 @@ import { AlertTriangle, ArrowLeft, CheckCircle2, FileSpreadsheet, Loader2, Uploa
 import Link from "next/link";
 
 const progressSteps = [
-  "Reading workbook",
-  "Scanning formulas",
-  "Detecting risks",
-  "Generating report",
+  "File selected",
+  "Uploading workbook",
+  "Parsing sheets and formulas",
+  "Running audit engine",
+  "Report ready",
 ];
 
-type UploadError = "wrong-type" | "failed-backend" | "corrupted-file" | "empty-workbook";
+type UploadError = "wrong-type" | "failed-backend" | "corrupted-file" | "empty-workbook" | "backend-unavailable";
 
 const errorCopy: Record<UploadError, { title: string; detail: string }> = {
   "wrong-type": {
@@ -32,10 +33,17 @@ const errorCopy: Record<UploadError, { title: string; detail: string }> = {
     title: "Empty workbook",
     detail: "The uploaded workbook does not appear to contain auditable sheets, cells, or formulas.",
   },
+  "backend-unavailable": {
+    title: "Backend unavailable",
+    detail: "Cannot reach the audit service at localhost:8000. Start the backend and try again.",
+  },
 };
 
 function classifyError(message: string): UploadError {
   const lower = message.toLowerCase();
+  if (lower.includes("failed to fetch") || lower.includes("network") || lower.includes("econnrefused") || lower.includes("unreachable")) {
+    return "backend-unavailable";
+  }
   if (lower.includes("corrupt") || lower.includes("invalid") || lower.includes("zip") || lower.includes("parse")) {
     return "corrupted-file";
   }
@@ -187,9 +195,31 @@ export default function UploadPage() {
           ) : (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
               <p className="text-lg font-semibold mb-1">{dragOver ? "Release to inspect workbook" : "Drop your Excel model here"}</p>
-              <p className="text-sm text-[#a1a1aa]">or click to browse .xlsx files</p>
+              <p className="text-sm text-[#a1a1aa]">or click to browse — .xlsx files only</p>
             </motion.div>
           )}
+
+          {/* Accepted file type badge */}
+          {!file && !loading && (
+            <div className="mt-3 flex items-center justify-center gap-2">
+              <span className="text-[0.65rem] uppercase tracking-wider text-[#71717a] bg-[#ffffff06] border border-[#27272a] rounded px-2 py-0.5">
+                .xlsx only
+              </span>
+              <span className="text-[0.65rem] text-[#71717a]">Max size: 10 MB</span>
+            </div>
+          )}
+        </motion.div>
+
+        {/* Privacy notice */}
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}
+          className="mt-6 rounded-xl border border-[#27272a] bg-[#ffffff03] p-4">
+          <p className="text-xs font-semibold text-[#a1a1aa] mb-2">Data Safety</p>
+          <ul className="space-y-1.5 text-xs text-[#71717a]">
+            <li>• Files are processed only to generate the audit report.</li>
+            <li>• Uploaded workbooks are not used for model training.</li>
+            <li>• Avoid uploading confidential client files to the public demo.</li>
+            <li>• For production use, private deployment and retention controls would be required.</li>
+          </ul>
         </motion.div>
 
         {file && (

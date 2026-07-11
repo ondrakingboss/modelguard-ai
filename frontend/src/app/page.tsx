@@ -52,6 +52,20 @@ export default function LandingPage() {
 
       {/* Features */}
       <section className="max-w-5xl mx-auto px-6 pb-24">
+        {/* Data safety trust card */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.5, duration: 0.4 }}
+          className="glass p-5 mb-10 border border-[#22c55e]/10"
+        >
+          <p className="text-sm text-[#a1a1aa] leading-relaxed">
+            <strong className="text-[#fafafa]">Your files are processed for analysis only.</strong>{" "}
+            ModelGuard does not use uploaded files for training. Files are not stored permanently
+            after analysis.
+          </p>
+        </motion.div>
+
         <motion.div
           initial={{ opacity: 0, y: 40 }}
           animate={{ opacity: 1, y: 0 }}

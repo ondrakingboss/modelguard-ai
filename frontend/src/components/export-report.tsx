@@ -140,12 +140,24 @@ export default function ExportReport({ result }: { result: AuditResult }) {
     text(`Critical: ${result.severity_breakdown.critical}   High: ${result.severity_breakdown.high}   Medium: ${result.severity_breakdown.medium}   Low: ${result.severity_breakdown.low}`, margin, 11, true);
     y -= 10;
 
-    text("Top 3 Critical Risks", margin, 14, true);
-    (criticalRisks.length ? criticalRisks : result.issues.slice(0, 3)).forEach((issue, index) => {
-      ensure();
-      text(`${index + 1}. ${issue.title}`, margin, 11, true);
-      paragraph(`${issue.sheet}!${issue.cell} - ${issue.why_it_matters}`, 88);
-    });
+    const sectionLabel = criticalRisks.length > 0
+      ? "Top Critical Risks"
+      : result.severity_breakdown.high > 0
+        ? "Top Findings"
+        : "No high-priority findings detected";
+
+    text(sectionLabel, margin, 14, true);
+    if (criticalRisks.length > 0 || result.severity_breakdown.high > 0) {
+      const displayIssues = criticalRisks.length > 0 ? criticalRisks : result.issues.filter(i => i.severity === "high").slice(0, 3);
+      if (displayIssues.length === 0) {
+        displayIssues.push(...result.issues.slice(0, 3));
+      }
+      displayIssues.forEach((issue, index) => {
+        ensure();
+        text(`${index + 1}. ${issue.title}`, margin, 11, true);
+        paragraph(`${issue.sheet}!${issue.cell} - ${issue.why_it_matters}`, 88);
+      });
+    }
 
     ensure(120);
     text("Full Issue Table", margin, 14, true);
