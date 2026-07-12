@@ -13,7 +13,7 @@ from models import AuditResult, Issue, SeverityBreakdown
 from parser import ParsedWorkbook, cell_value
 
 
-FORMULA_ERRORS = {"#REF!", "#DIV/0!", "#VALUE!"}
+FORMULA_ERRORS = {"#REF!", "#DIV/0!", "#VALUE!", "#N/A", "#NAME?", "#NUM!", "#NULL!"}
 EXTERNAL_LINK_RE = re.compile(r"\[[^\]]+\.(?:xlsx|xlsm|xlsb|xls)\]", re.IGNORECASE)
 CELL_REF_RE = re.compile(r"(?<![A-Z0-9_])\$?([A-Z]{1,3})\$?([1-9][0-9]*)(?![A-Z0-9_])", re.IGNORECASE)
 NUMBER_RE = re.compile(r"(?<![A-Z])[-+]?\d+(?:\.\d+)?%?")
@@ -40,6 +40,8 @@ def audit_workbook(parsed: ParsedWorkbook) -> AuditResult:
 
     # Deduplicate before collapsing row noise
     issues = _dedupe_issues(issues)
+    # Detect pairwise circular references (A→B and B→A)
+    issues = _detect_pairwise_circulars(workbook, issues)
     # Collapse repeated findings across adjacent cells in the same row
     issues = _collapse_row_noise(issues)
 
@@ -126,7 +128,11 @@ def _scan_cells(worksheet: Worksheet) -> list[Issue]:
             value = cell.value
             text = cell_value(value)
 
-            if text in FORMULA_ERRORS:
+            # Check for error tokens in the value (both bare errors and embedded in formulas)
+            has_error = text in FORMULA_ERRORS or any(
+                err in text for err in FORMULA_ERRORS
+            )
+            if has_error:
                 issues.append(_formula_error_issue(worksheet, cell, text))
 
             if _is_formula(value):
@@ -400,6 +406,69 @@ def _has_hardcoded_constants(formula: str) -> bool:
             return True
     return False
 
+
+def _detect_pairwise_circulars(workbook: Any, issues: list[Issue]) -> list[Issue]:
+    """Detect A→B and B→A circular reference pairs that cross-reference between cells."""
+    # Build a map: cell coordinate → set of referenced cell coordinates
+    refs: dict[tuple[str, str], set[tuple[str, str]]] = {}
+
+    for worksheet in workbook.worksheets:
+        for row in worksheet.iter_rows():
+            for cell in row:
+                value = cell.value
+                if not _is_formula(value):
+                    continue
+                formula = str(value)
+                source = (worksheet.title, cell.coordinate)
+                refs.setdefault(source, set())
+                for match in CELL_REF_RE.finditer(formula):
+                    target_coord = f"{match.group(1).upper()}{match.group(2)}"
+                    # Assume same sheet for simple references
+                    refs[source].add((worksheet.title, target_coord))
+
+    # Find pairs where A references B and B references A
+    found: set[tuple[str, str]] = set()
+    for (sheet_a, coord_a), targets_a in list(refs.items()):
+        for (sheet_b, coord_b) in targets_a:
+            if (sheet_b, coord_b) not in refs:
+                continue
+            if (sheet_a, coord_a) in refs[(sheet_b, coord_b)]:
+                # Found a pair — flag both if not already flagged
+                pair_key = tuple(sorted([(sheet_a, coord_a), (sheet_b, coord_b)]))
+                if pair_key in found:
+                    continue
+                found.add(pair_key)
+
+                # Determine which cell to flag (avoid double-flagging self-refs already caught)
+                for sheet, coord in [(sheet_a, coord_a), (sheet_b, coord_b)]:
+                    # Find the OPPOSITE cell in the pair
+                    other_sheet = sheet_b if (sheet, coord) == (sheet_a, coord_a) else sheet_a
+                    other_coord = coord_b if (sheet, coord) == (sheet_a, coord_a) else coord_a
+                    worksheet = workbook[sheet]
+                    cell = worksheet[coord]
+                    issues.append(
+                        _issue(
+                            severity="high",
+                            sheet=sheet,
+                            cell=coord,
+                            category="Circular Reference",
+                            title=f"Circular reference pair: {coord} ↔ {other_coord}",
+                            description=(
+                                f"Cell {coord} references {pair_key[1][1] if pair_key[1][0] == sheet else pair_key[0][1]} "
+                                f"which references back, forming a circular dependency loop."
+                            ),
+                            why_it_matters=(
+                                "Cross-cell circular references produce unstable outputs that depend on iteration order "
+                                "and can mask calculation errors. They often indicate a modeling logic flaw."
+                            ),
+                            suggested_fix=(
+                                "Break the cycle by moving one side of the dependency to a separate schedule "
+                                "or using a controlled iterative structure with explicit convergence logic."
+                            ),
+                        )
+                    )
+
+    return issues
 
 def _formula_pattern(formula: str, row: int, column: int) -> str:
     def replace_ref(match: re.Match[str]) -> str:
