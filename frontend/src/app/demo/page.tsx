@@ -1,5 +1,6 @@
 "use client";
 
+import { apiUrl } from "@/lib/api";
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
@@ -25,7 +26,7 @@ export default function DemoPage() {
       } catch {}
     }
 
-    fetch("/api/demo")
+    fetch(apiUrl("/api/demo"))
       .then((r) => r.json())
       .then(setData)
       .finally(() => setLoading(false));

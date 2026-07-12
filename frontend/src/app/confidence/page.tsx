@@ -1,5 +1,6 @@
 "use client";
 
+import { apiUrl } from "@/lib/api";
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
@@ -22,7 +23,7 @@ export default function ConfidencePage() {
   async function fetchConfidence(id: string) {
     setLoading(true);
     try {
-      const res = await fetch(`/api/confidence/${id}`);
+      const res = await fetch(apiUrl(`/api/confidence/${id}`));
       if (res.ok) {
         const json = await res.json();
         setData(json.categories);

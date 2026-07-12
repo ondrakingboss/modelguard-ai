@@ -1,5 +1,6 @@
 "use client";
 
+import { apiUrl } from "@/lib/api";
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
@@ -24,7 +25,7 @@ export default function AnalyzePage() {
   async function fetchAnalysis(id: string) {
     setLoading(true);
     try {
-      const res = await fetch(`/api/analyze/${id}`);
+      const res = await fetch(apiUrl(`/api/analyze/${id}`));
       if (res.ok) setData(await res.json());
     } catch {}
     setLoading(false);

@@ -1,5 +1,6 @@
 "use client";
 
+import { apiUrl } from "@/lib/api";
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { useRouter } from "next/navigation";
@@ -98,7 +99,7 @@ export default function UploadPage() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const res = await fetch("/api/upload", { method: "POST", body: formData });
+      const res = await fetch(apiUrl("/api/upload"), { method: "POST", body: formData });
       if (!res.ok) {
         const body = await res.text();
         throw new Error(body || `Upload failed: ${res.statusText}`);

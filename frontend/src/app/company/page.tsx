@@ -1,5 +1,6 @@
 "use client";
 
+import { apiUrl } from "@/lib/api";
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
@@ -25,7 +26,7 @@ export default function CompanyPage() {
   async function fetchDemo(id: string) {
     setLoading(true); setError(null);
     try {
-      const res = await fetch(`/api/company-demo/${id}`);
+      const res = await fetch(apiUrl(`/api/company-demo/${id}`));
       if (res.ok) setData(await res.json());
       else setError("Failed to load demo profile.");
     } catch { setError("Backend connection failed."); }
@@ -37,7 +38,7 @@ export default function CompanyPage() {
     setUploading(true); setError(null);
     try {
       const fd = new FormData(); fd.append("file", file);
-      const res = await fetch("/api/analyze-company", { method: "POST", body: fd });
+      const res = await fetch(apiUrl("/api/analyze-company"), { method: "POST", body: fd });
       if (!res.ok) throw new Error(await res.text());
       setData(await res.json());
     } catch (e: any) { setError(e.message || "Upload failed"); }
