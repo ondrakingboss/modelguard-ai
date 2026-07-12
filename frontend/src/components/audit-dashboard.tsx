@@ -3,13 +3,13 @@
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { motion } from "framer-motion";
-import { AlertCircle, AlertTriangle, CheckCircle2, Flame } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Flame, Info, Shield } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-interface Issue {
+export interface Issue {
   id: string;
   severity: "critical" | "high" | "medium" | "low";
   sheet: string;
@@ -19,9 +19,23 @@ interface Issue {
   description: string;
   why_it_matters: string;
   suggested_fix: string;
+  output_impact?: string;
 }
 
-interface AuditResult {
+export interface ScoreExplanation {
+  score: number;
+  score_band: string;
+  main_drivers: string[];
+  penalty_breakdown: Record<string, number>;
+  caps_applied: string[];
+  floor_rules_applied: string[];
+  what_is_known: string;
+  what_is_unknown: string;
+  why_not_lower: string;
+  why_not_higher: string;
+}
+
+export interface AuditResult {
   model_score: number;
   summary: string;
   issues: Issue[];
@@ -31,6 +45,7 @@ interface AuditResult {
     medium: number;
     low: number;
   };
+  score_explanation?: ScoreExplanation | null;
 }
 
 function scoreColor(score: number) {
@@ -42,10 +57,12 @@ function scoreColor(score: number) {
 
 export default function AuditScore({ result }: { result: AuditResult }) {
   const [displayScore, setDisplayScore] = useState(0);
+  const [showExplanation, setShowExplanation] = useState(false);
   const color = scoreColor(result.model_score);
   const radius = 80;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (displayScore / 100) * circumference;
+  const explanation = result.score_explanation;
 
   useEffect(() => {
     const duration = 950;
@@ -68,7 +85,7 @@ export default function AuditScore({ result }: { result: AuditResult }) {
       initial={{ opacity: 0, y: 14 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
-      className="flex flex-col items-center gap-4 py-8"
+      className="flex flex-col items-center gap-3 py-8"
     >
       <div className="relative w-48 h-48">
         <svg className="score-ring w-full h-full -rotate-90" viewBox="0 0 180 180">
@@ -82,7 +99,141 @@ export default function AuditScore({ result }: { result: AuditResult }) {
           <span className="text-sm text-[#a1a1aa]">/ 100</span>
         </div>
       </div>
+
+      {/* Score band badge */}
+      {explanation && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ delay: 0.5 }}
+          className="px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider"
+          style={{
+            background: `${color}18`,
+            color,
+            border: `1px solid ${color}40`,
+          }}
+        >
+          {explanation.score_band}
+        </motion.div>
+      )}
+
       <p className="text-[#a1a1aa] text-sm max-w-md text-center">{result.summary}</p>
+
+      {/* Expandable "Why This Score?" */}
+      {explanation && (
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.6 }}
+          className="w-full max-w-xl"
+        >
+          <button
+            onClick={() => setShowExplanation(!showExplanation)}
+            className="w-full glass p-4 text-left flex items-center justify-between gap-3 hover:border-[#3f3f46] transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <Info className="w-4 h-4 text-[#a1a1aa]" />
+              <span className="text-sm font-medium">Why This Score?</span>
+            </div>
+            {showExplanation ? (
+              <ChevronUp className="w-4 h-4 text-[#71717a]" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-[#71717a]" />
+            )}
+          </button>
+
+          <AnimatePresence>
+            {showExplanation && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.25 }}
+                className="overflow-hidden"
+              >
+                <div className="glass border-t-0 rounded-t-none p-5 space-y-5">
+                  {/* What is known */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <Shield className="w-3.5 h-3.5 text-green-400" />
+                      <h4 className="text-xs font-semibold text-green-400 uppercase tracking-wider">What Is Known</h4>
+                    </div>
+                    <p className="text-xs text-[#a1a1aa] leading-relaxed">{explanation.what_is_known}</p>
+                  </div>
+
+                  {/* What is unknown */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <Info className="w-3.5 h-3.5 text-yellow-400" />
+                      <h4 className="text-xs font-semibold text-yellow-400 uppercase tracking-wider">What Is Unknown</h4>
+                    </div>
+                    <p className="text-xs text-[#a1a1aa] leading-relaxed">{explanation.what_is_unknown}</p>
+                  </div>
+
+                  {/* Key drivers */}
+                  {explanation.main_drivers.length > 0 && (
+                    <div>
+                      <h4 className="text-xs font-semibold text-[#fafafa] mb-2">Key Score Drivers</h4>
+                      <ul className="space-y-1.5">
+                        {explanation.main_drivers.map((d, i) => (
+                          <li key={i} className="flex items-start gap-2 text-xs text-[#a1a1aa]">
+                            <span className="text-[#71717a] mt-0.5">▸</span>
+                            {d}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Caps and floors */}
+                  {(explanation.caps_applied.length > 0 || explanation.floor_rules_applied.length > 0) && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {explanation.caps_applied.length > 0 && (
+                        <div>
+                          <h4 className="text-xs font-semibold text-[#fafafa] mb-2">Caps Applied</h4>
+                          <ul className="space-y-1">
+                            {explanation.caps_applied.map((c, i) => (
+                              <li key={i} className="text-xs text-[#a1a1aa]">{c}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {explanation.floor_rules_applied.length > 0 && (
+                        <div>
+                          <h4 className="text-xs font-semibold text-[#fafafa] mb-2">Floor Rules</h4>
+                          <ul className="space-y-1">
+                            {explanation.floor_rules_applied.map((f, i) => (
+                              <li key={i} className="text-xs text-[#a1a1aa]">{f}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* What would improve / make worse */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-[#27272a]">
+                    <div>
+                      <h4 className="text-xs font-semibold text-green-400 mb-1.5">What Would Improve</h4>
+                      <p className="text-xs text-[#a1a1aa] leading-relaxed">
+                        Resolve critical formula errors, break circular references, unhide content feeding calculations,
+                        and restore consistent formula patterns. Each resolved finding directly raises the score.
+                      </p>
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-semibold text-red-400 mb-1.5">What Would Make It Worse</h4>
+                      <p className="text-xs text-[#a1a1aa] leading-relaxed">
+                        If hidden content is found to materially feed key outputs, or if circular references
+                        are proven to affect revenue/EBITDA/valuation, the score floor drops to 25.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.div>
+      )}
     </motion.div>
   );
 }

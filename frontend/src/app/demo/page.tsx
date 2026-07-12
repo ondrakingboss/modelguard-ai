@@ -5,31 +5,8 @@ import { motion } from "framer-motion";
 import Link from "next/link";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { AuditScore, SeverityGrid, IssueTable, IssueModal, SummaryCard } from "@/components/audit-dashboard";
+import type { AuditResult, Issue } from "@/components/audit-dashboard";
 import ExportReport from "@/components/export-report";
-
-interface Issue {
-  id: string;
-  severity: "critical" | "high" | "medium" | "low";
-  sheet: string;
-  cell: string;
-  category: string;
-  title: string;
-  description: string;
-  why_it_matters: string;
-  suggested_fix: string;
-}
-
-interface AuditResult {
-  model_score: number;
-  summary: string;
-  issues: Issue[];
-  severity_breakdown: {
-    critical: number;
-    high: number;
-    medium: number;
-    low: number;
-  };
-}
 
 export default function DemoPage() {
   const [data, setData] = useState<AuditResult | null>(null);

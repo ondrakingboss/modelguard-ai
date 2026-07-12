@@ -12,6 +12,20 @@ interface Issue {
   description: string;
   why_it_matters: string;
   suggested_fix: string;
+  output_impact?: string;
+}
+
+interface ScoreExplanation {
+  score: number;
+  score_band: string;
+  main_drivers: string[];
+  penalty_breakdown: Record<string, number>;
+  caps_applied: string[];
+  floor_rules_applied: string[];
+  what_is_known: string;
+  what_is_unknown: string;
+  why_not_lower: string;
+  why_not_higher: string;
 }
 
 interface AuditResult {
@@ -24,6 +38,7 @@ interface AuditResult {
     medium: number;
     low: number;
   };
+  score_explanation?: ScoreExplanation | null;
 }
 
 const columns: Array<keyof Issue> = [
@@ -139,6 +154,42 @@ export default function ExportReport({ result }: { result: AuditResult }) {
     text("Severity Breakdown", margin, 14, true);
     text(`Critical: ${result.severity_breakdown.critical}   High: ${result.severity_breakdown.high}   Medium: ${result.severity_breakdown.medium}   Low: ${result.severity_breakdown.low}`, margin, 11, true);
     y -= 10;
+
+    // Score explanation
+    const explanation = result.score_explanation;
+    if (explanation) {
+      ensure(30);
+      text("Score Explanation", margin, 14, true);
+      text(`${explanation.score_band} — ${explanation.score}/100`, margin, 11, true);
+      y -= 6;
+
+      if (explanation.what_is_known) {
+        ensure(50);
+        text("What is known:", margin, 10, true);
+        wrap(explanation.what_is_known, 82).forEach((line) => text(line, margin + 4, 9));
+        y -= 4;
+      }
+
+      if (explanation.what_is_unknown) {
+        ensure(50);
+        text("What is unknown:", margin, 10, true);
+        wrap(explanation.what_is_unknown, 82).forEach((line) => text(line, margin + 4, 9));
+        y -= 4;
+      }
+
+      if (explanation.caps_applied.length > 0) {
+        ensure(30);
+        text("Caps applied:", margin, 10, true);
+        explanation.caps_applied.slice(0, 3).forEach((c) => text(`- ${c}`, margin + 8, 9));
+        y -= 4;
+      }
+
+      text("", margin, 10);
+      text("IMPORTANT: The audit engine classifies findings structurally. Output impact", margin, 10);
+      text("may not have been traced to final model figures. A human reviewer should", margin, 10);
+      text("assess whether flagged cells materially affect key financial outputs.", margin, 10);
+      y -= 10;
+    }
 
     const sectionLabel = criticalRisks.length > 0
       ? "Top Critical Risks"
