@@ -52,9 +52,14 @@ export default function DemoPage() {
 
   return (
     <main className="min-h-screen max-w-5xl mx-auto px-6 py-8">
-      <Link href="/" className="inline-flex items-center gap-2 text-sm text-[#a1a1aa] hover:text-[#fafafa] mb-6 transition-colors">
-        <ArrowLeft className="w-4 h-4" /> Back
-      </Link>
+      <div className="flex items-center justify-between mb-6">
+        <Link href="/" className="inline-flex items-center gap-2 text-sm text-[#a1a1aa] hover:text-[#fafafa] transition-colors">
+          <ArrowLeft className="w-4 h-4" /> Back
+        </Link>
+        <span className="text-xs text-[#71717a] bg-[#ffffff06] border border-[#27272a] rounded-full px-3 py-1">
+          Demo Mode — Sample Data
+        </span>
+      </div>
 
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
         <AuditScore result={data} />

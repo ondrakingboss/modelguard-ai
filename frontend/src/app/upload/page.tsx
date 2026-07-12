@@ -105,8 +105,9 @@ export default function UploadPage() {
       }
       const data = await res.json();
       sessionStorage.setItem("auditResult", JSON.stringify(data));
+      sessionStorage.setItem("auditFilename", file.name);
       setActiveStep(progressSteps.length - 1);
-      router.push("/demo?uploaded=true");
+      router.push("/results");
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Upload failed";
       setError(classifyError(message));
