@@ -895,83 +895,125 @@ def _worse_severity(a: str, b: str) -> str:
     return a if order.get(a, 0) >= order.get(b, 0) else b
 
 
+def _classify_output_impact(severity: str, category: str, sheet: str, cell: str) -> str:
+    """Heuristic classification. Conservative — defaults to 'unknown' unless confident."""
+    sheet_lower = sheet.lower()
+    is_key_sheet = any(kw in sheet_lower for kw in ("p&l", "profit", "income", "balance", "cash flow", "cashflow", "valuation"))
+    is_assumptions = "assumption" in sheet_lower
+
+    if category == "Business Logic" and is_key_sheet:
+        return "high"
+    if category == "Formula Error" and is_key_sheet:
+        return "high"
+    if category == "Circular Reference":
+        return "medium" if is_assumptions else "unknown"
+    if category == "Hidden Content":
+        return "medium"
+    if category == "External Links":
+        return "unknown"
+    if category == "Formula Integrity":
+        return "low"
+    return "unknown"
+
+
+# Output impact penalty multipliers
+_IMPACT_MULTIPLIER = {
+    "unknown": 0.5,
+    "low": 0.4,
+    "medium": 0.7,
+    "high": 1.0,
+    "key-output": 1.3,
+}
+
+
 def _score_model(issues: list[Issue], breakdown: SeverityBreakdown) -> int:
-    """Calibrated scoring with per-severity caps, category caps, and floor rules.
+    """Materiality-aware scoring with output-impact-adjusted penalties.
 
-    Base score: 100. Penalties reduce it. Floor rules set maximum ceilings.
+    Findings with unknown or low output impact carry reduced weight.
+    Only proven key-output impact applies the full penalty.
     """
-    # ── Penalty calculation ──
-    critical_count = breakdown.critical
-    high_count = breakdown.high
-    medium_count = breakdown.medium
-    low_count = breakdown.low
+    # Calculate penalties with output-impact weighting
+    def _weighted(cat: str, sev: str, base_weight: int) -> float:
+        matches = [i for i in issues if i.severity == sev and i.category == cat]
+        return sum(base_weight * _IMPACT_MULTIPLIER.get(i.output_impact, 0.5) for i in matches)
 
-    # Count formula-integrity category findings for its own cap
-    formula_noise_count = sum(1 for i in issues if i.category == "Formula Integrity")
-    # Count row-grouped findings (title contains ×N cells)
-    row_group_count = sum(1 for i in issues if "×" in i.title and "cells" in i.title)
+    # Separately weight formula errors and circular refs by impact
+    critical_formula_errors = [i for i in issues if i.severity == "critical" and i.category == "Formula Error"]
+    critical_circular = [i for i in issues if i.severity == "critical" and i.category == "Circular Reference"]
+    critical_other = breakdown.critical - len(critical_formula_errors) - len(critical_circular)
 
-    # Per-severity penalties (with caps)
-    critical_penalty = min(critical_count * 25, 60)
-    high_penalty = min(high_count * 12, 45)
-    medium_penalty = min(medium_count * 4, 28)
-    low_penalty = min(low_count * 1, 8)
+    crit_penalty = sum(25 * _IMPACT_MULTIPLIER.get(i.output_impact, 0.5) for i in critical_formula_errors + critical_circular)
+    crit_penalty += critical_other * 25 * 0.5  # unknown criticals get 0.5x
 
-    # Category caps
-    formula_noise_penalty = min(formula_noise_count * 3, 20)
-    # Row groups: count each group once (already counted in severity), but cap total
-    row_group_excess = max(0, row_group_count - 5) * 1
+    # High: separate by category for impact weighting
+    high_all = [i for i in issues if i.severity == "high"]
+    high_penalty = sum(12 * _IMPACT_MULTIPLIER.get(i.output_impact, 0.5) for i in high_all)
 
-    total_penalty = (
-        critical_penalty
-        + high_penalty
-        + medium_penalty
-        + low_penalty
-        + row_group_excess
-    )
+    # Medium
+    medium_all = [i for i in issues if i.severity == "medium"]
+    medium_penalty = sum(4 * _IMPACT_MULTIPLIER.get(i.output_impact, 0.5) for i in medium_all)
 
-    score = max(0, 100 - total_penalty)
+    # Low
+    low_all = [i for i in issues if i.severity == "low"]
+    low_penalty = sum(1 * _IMPACT_MULTIPLIER.get(i.output_impact, 0.5) for i in low_all)
 
-    # ── Floor rules ──
-    has_critical = critical_count > 0
-    has_formula_error = any(
-        i.category == "Formula Error" and i.severity == "critical" for i in issues
-    )
-    has_circular = any(i.category == "Circular Reference" for i in issues)
-    high_count_3plus = high_count >= 3
-    hidden_feeds_calc = any(
-        i.category == "Hidden Content" and i.severity in ("high", "critical")
+    # Cap raw penalties
+    critical_penalty = min(crit_penalty, 50)
+    high_penalty = min(high_penalty, 35)
+    medium_penalty = min(medium_penalty, 24)
+    low_penalty = min(low_penalty, 6)
+
+    total_penalty = critical_penalty + high_penalty + medium_penalty + low_penalty
+    score = max(0, 100 - int(total_penalty))
+
+    # ── Floor rules (maximum ceilings) ──
+    has_key_output_error = any(
+        i.output_impact in ("key-output", "high")
+        and i.severity in ("critical", "high")
         for i in issues
     )
+    has_circular = any(i.category == "Circular Reference" for i in issues)
+    has_critical = breakdown.critical > 0
+    high_count_3plus = breakdown.high >= 3
 
-    if has_formula_error and has_circular:
+    # Key output floor: if a critical error or high business logic affects key outputs
+    if has_circular and has_key_output_error:
+        score = min(score, 25)
+    elif has_circular and (has_critical or breakdown.high >= 3):
         score = min(score, 45)
     elif has_circular:
         score = min(score, 60)
+    elif has_key_output_error:
+        score = min(score, 35)
     elif has_critical:
-        score = min(score, 75)
+        score = min(score, 60)
     elif high_count_3plus:
-        score = min(score, 55)
-    elif hidden_feeds_calc:
-        score = min(score, 55)
+        score = min(score, 50)
 
     return max(0, min(100, score))
+
+
+def _score_band(score: int) -> str:
+    """Human-readable score band."""
+    if score >= 90:
+        return "Clean / Low Risk"
+    elif score >= 70:
+        return "Minor Issues"
+    elif score >= 45:
+        return "Review Recommended"
+    elif score >= 25:
+        return "High Risk"
+    elif score >= 10:
+        return "Severe Risk"
+    else:
+        return "Critical Failure"
 
 
 def _build_score_explanation(
     score: int, issues: list[Issue], breakdown: SeverityBreakdown
 ) -> ScoreExplanation:
-    """Build a human-readable score explanation."""
-    if score >= 80:
-        band = "Healthy"
-    elif score >= 60:
-        band = "Mostly Sound"
-    elif score >= 40:
-        band = "Moderate Risk"
-    elif score >= 20:
-        band = "High Risk"
-    else:
-        band = "Critical Risk"
+    """Build a human-readable score explanation with materiality context."""
+    band = _score_band(score)
 
     # Main drivers
     drivers: list[str] = []
@@ -992,38 +1034,53 @@ def _build_score_explanation(
         "high_weight": -12,
         "medium_weight": -4,
         "low_weight": -1,
-        "critical_total": min(breakdown.critical * 25, 60),
-        "high_total": min(breakdown.high * 12, 45),
-        "medium_total": min(breakdown.medium * 4, 28),
-        "low_total": min(breakdown.low * 1, 8),
     }
 
     # Caps applied
     caps: list[str] = []
-    if breakdown.medium * 4 > 28:
-        caps.append(f"Medium penalty capped at -28 (actual: -{breakdown.medium * 4})")
-    if breakdown.high * 12 > 45:
-        caps.append(f"High penalty capped at -45 (actual: -{breakdown.high * 12})")
-    if breakdown.critical * 25 > 60:
-        caps.append(f"Critical penalty capped at -60 (actual: -{breakdown.critical * 25})")
-    formula_count = sum(1 for i in issues if i.category == "Formula Integrity")
-    if formula_count * 3 > 20:
-        caps.append(f"Formula noise cap applied: {formula_count} findings limited to -20")
+    impact_levels = set(i.output_impact for i in issues)
+    if "unknown" in impact_levels:
+        caps.append(
+            f"Output impact unknown for {sum(1 for i in issues if i.output_impact == 'unknown')} "
+            f"finding(s) — penalties reduced by 50% until impact is proven"
+        )
+    if breakdown.medium > 10:
+        caps.append(f"Medium findings ({breakdown.medium}) have individually low impact weighting")
 
-    # Floor rules applied
+    # Floor rules
     floors: list[str] = []
-    has_formula_error = any(i.category == "Formula Error" and i.severity == "critical" for i in issues)
+    has_key = any(i.output_impact in ("key-output", "high") and i.severity in ("critical", "high") for i in issues)
     has_circular = any(i.category == "Circular Reference" for i in issues)
-    if has_formula_error and has_circular:
-        floors.append("Critical formula error + circular reference → max score 45")
+    if has_key and has_circular:
+        floors.append("Key-output error + circular reference → max score 25")
     elif has_circular:
-        floors.append("Circular reference → max score 60")
+        floors.append("Circular reference → max score 45")
+    elif has_key:
+        floors.append("Key-output error detected → max score 35")
     elif breakdown.critical > 0:
-        floors.append("Critical findings → max score 75")
+        floors.append("Critical findings → max score 60")
     elif breakdown.high >= 3:
-        floors.append("3+ high findings → max score 55")
+        floors.append("3+ high findings → max score 50")
 
-    # Narrative
+    # Known/unknown
+    key_impact_count = sum(1 for i in issues if i.output_impact in ("key-output", "high"))
+    unknown_count = sum(1 for i in issues if i.output_impact == "unknown")
+    proven_issues = sum(1 for i in issues if i.output_impact != "unknown")
+
+    what_is_known = (
+        f"The audit engine detected {len(issues)} issue(s): "
+        f"{breakdown.critical} critical, {breakdown.high} high, {breakdown.medium} medium, {breakdown.low} low. "
+        f"{proven_issues} finding(s) have classified output impact; "
+        f"{key_impact_count} affect key model outputs."
+    )
+
+    what_is_unknown = (
+        f"The output impact of {unknown_count} finding(s) could not be classified by the current engine. "
+        "The engine has not proven that every structural issue materially affects final valuation, "
+        "cash-flow, or key financial statement outputs. "
+        "A human reviewer should assess whether affected cells feed into reportable figures."
+    )
+
     why_not_higher = _build_why_not_higher(issues, breakdown, caps, floors)
     why_not_lower = _build_why_not_lower(issues, breakdown, caps)
 
@@ -1034,6 +1091,8 @@ def _build_score_explanation(
         penalty_breakdown=penalties,
         caps_applied=caps,
         floor_rules_applied=floors,
+        what_is_known=what_is_known,
+        what_is_unknown=what_is_unknown,
         why_not_lower=why_not_lower,
         why_not_higher=why_not_higher,
     )
@@ -1100,17 +1159,9 @@ def _build_why_not_lower(
 def _summary_for(score: int, issue_count: int, breakdown: SeverityBreakdown) -> str:
     if issue_count == 0:
         return "No audit issues were detected. The workbook appears structurally clean based on the configured checks."
-    if score >= 80:
-        posture = "mostly sound"
-    elif score >= 60:
-        posture = "moderate risk"
-    elif score >= 40:
-        posture = "high risk"
-    else:
-        posture = "critical risk"
-
+    band = _score_band(score)
     return (
-        f"Detected {issue_count} issue(s). Model risk is {posture}, with "
+        f"Detected {issue_count} issue(s). Model score {score}/100 — {band}. "
         f"{breakdown.critical} critical, {breakdown.high} high, "
         f"{breakdown.medium} medium, and {breakdown.low} low severity finding(s)."
     )
@@ -1126,10 +1177,12 @@ def _issue(
     description: str,
     why_it_matters: str,
     suggested_fix: str,
+    output_impact: str = "",
 ) -> Issue:
     digest = hashlib.sha1(
         "|".join([severity, sheet, cell, category, title, description]).encode("utf-8")
     ).hexdigest()[:10]
+    impact = output_impact if output_impact else _classify_output_impact(severity, category, sheet, cell)
     return Issue(
         id=f"issue_{digest}",
         severity=severity,  # type: ignore[arg-type]
@@ -1140,4 +1193,5 @@ def _issue(
         description=description,
         why_it_matters=why_it_matters,
         suggested_fix=suggested_fix,
+        output_impact=impact,  # type: ignore[arg-type]
     )

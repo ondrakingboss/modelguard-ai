@@ -18,6 +18,7 @@ def _make(
     title: str = "Test issue",
     sheet: str = "Sheet1",
     cell: str = "A1",
+    impact: str = "unknown",
 ) -> Issue:
     return Issue(
         id=id,
@@ -29,6 +30,7 @@ def _make(
         description="Test",
         why_it_matters="Test",
         suggested_fix="Test",
+        output_impact=impact,
     )
 
 
@@ -143,3 +145,101 @@ def test_no_collapse_two_cells():
 def test_worse_severity():
     assert _worse_severity("low", "medium") == "medium"
     assert _worse_severity("critical", "low") == "critical"
+
+
+# ── Materiality / Output Impact ──
+
+def test_critical_with_unknown_impact_not_zero():
+    """Critical with unknown impact should not automatically force 0-9."""
+    issues = [
+        _make("c1", "critical", "Formula Error", impact="unknown"),
+    ]
+    score = _score_model(issues, _bd(issues))
+    assert score >= 50, f"Unknown-impact critical should score >=50, got {score}"
+
+
+def test_critical_with_high_impact_can_be_low():
+    """Critical with high output impact can score much lower."""
+    issues = [
+        _make("c1", "critical", "Formula Error", impact="high"),
+        _make("cr", "high", "Circular Reference", impact="medium"),
+    ]
+    score = _score_model(issues, _bd(issues))
+    assert score < 60, f"High-impact critical scores below 60, got {score}"
+
+
+def test_hidden_empty_rows_dont_tank_score():
+    """Hidden empty rows with low impact should barely affect score."""
+    issues = [
+        _make("h1", "low", "Hidden Content", impact="low"),
+        _make("h2", "low", "Hidden Content", impact="low"),
+        _make("h3", "low", "Hidden Content", impact="low"),
+    ]
+    score = _score_model(issues, _bd(issues))
+    assert score >= 90, f"Hidden empty rows should barely affect score, got {score}"
+
+
+def test_meddevice_like_profile_severe_not_critical():
+    """MedDevice-like: 1c+5h+20m, mixed impact → should be Severe Risk (10-24)."""
+    issues = [
+        _make("c1", "critical", "Formula Error", sheet="P&L", impact="high"),
+    ]
+    issues += [
+        _make(f"h{i}", "high", "Circular Reference", sheet="Assumptions", impact="medium")
+        for i in range(2)
+    ]
+    issues += [
+        _make(f"hh{i}", "high", "Hidden Content", impact="medium")
+        for i in range(3)
+    ]
+    issues += [
+        _make(f"m{i}", "medium", impact="low")
+        for i in range(20)
+    ]
+    score = _score_model(issues, _bd(issues))
+    assert 10 <= score <= 30, (
+        f"MedDevice profile should land 10-30 (Severe Risk), got {score}"
+    )
+
+
+def test_circular_with_unknown_impact_differs_from_key_output():
+    """Formula Error with unknown impact scores higher than with high impact."""
+    unknown = [
+        _make("c1", "high", "Formula Error", impact="unknown"),
+    ]
+    known = [
+        _make("c1", "high", "Formula Error", impact="high"),
+    ]
+    score_unknown = _score_model(unknown, _bd(unknown))
+    score_known = _score_model(known, _bd(known))
+    # 1 high × 12 × 0.5(unknown) = 6 → 94 vs 1 high × 12 × 1.0(high) = 12 → 88
+    assert score_unknown > score_known, (
+        f"Unknown-impact should score higher than high-impact, got {score_unknown} vs {score_known}"
+    )
+
+
+def test_what_is_known_includes_impact_counts():
+    """Score explanation includes known/unknown impact counts."""
+    issues = [
+        _make("c1", "critical", "Formula Error", impact="high", sheet="P&L"),
+        _make("m1", "medium", impact="unknown"),
+        _make("m2", "medium", impact="low"),
+    ]
+    bd = _bd(issues)
+    exp = _build_score_explanation(50, issues, bd)
+    assert exp.what_is_known
+    assert exp.what_is_unknown
+    assert "could not be classified" in exp.what_is_unknown.lower()
+
+
+def test_no_critical_language_in_unknown_model():
+    """A model with unknown impact should not use fraud-like language."""
+    issues = [
+        _make("m1", "medium", impact="unknown"),
+        _make("m2", "medium", impact="unknown"),
+    ]
+    bd = _bd(issues)
+    score = _score_model(issues, bd)
+    exp = _build_score_explanation(score, issues, bd)
+    assert "fraud" not in exp.why_not_higher.lower()
+    assert "fraud" not in exp.why_not_lower.lower()

@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 
 Severity = Literal["low", "medium", "high", "critical"]
+OutputImpact = Literal["unknown", "low", "medium", "high", "key-output"]
 
 
 class Issue(BaseModel):
@@ -16,6 +17,7 @@ class Issue(BaseModel):
     description: str
     why_it_matters: str
     suggested_fix: str
+    output_impact: OutputImpact = "unknown"
 
 
 class SeverityBreakdown(BaseModel):
@@ -32,6 +34,8 @@ class ScoreExplanation(BaseModel):
     penalty_breakdown: dict[str, int]
     caps_applied: list[str]
     floor_rules_applied: list[str]
+    what_is_known: str
+    what_is_unknown: str
     why_not_lower: str
     why_not_higher: str
 
