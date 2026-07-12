@@ -9,7 +9,7 @@ from openpyxl.cell.cell import Cell
 from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.worksheet.worksheet import Worksheet
 
-from models import AuditResult, Issue, SeverityBreakdown
+from models import AuditResult, Issue, ScoreExplanation, SeverityBreakdown
 from parser import ParsedWorkbook, cell_value
 
 
@@ -42,6 +42,8 @@ def audit_workbook(parsed: ParsedWorkbook) -> AuditResult:
     issues = _dedupe_issues(issues)
     # Detect pairwise circular references (A→B and B→A)
     issues = _detect_pairwise_circulars(workbook, issues)
+    # Consolidate related findings on same cell (hardcoded + inconsistent)
+    issues = _consolidate_related(issues)
     # Collapse repeated findings across adjacent cells in the same row
     issues = _collapse_row_noise(issues)
 
@@ -52,7 +54,8 @@ def audit_workbook(parsed: ParsedWorkbook) -> AuditResult:
         medium=severity_breakdown["medium"],
         low=severity_breakdown["low"],
     )
-    score = _score_model(breakdown)
+    score = _score_model(issues, breakdown)
+    explanation = _build_score_explanation(score, issues, breakdown)
     summary = _summary_for(score, len(issues), breakdown)
 
     return AuditResult(
@@ -60,6 +63,7 @@ def audit_workbook(parsed: ParsedWorkbook) -> AuditResult:
         summary=summary,
         issues=issues,
         severity_breakdown=breakdown,
+        score_explanation=explanation,
     )
 
 
@@ -67,16 +71,39 @@ def _detect_hidden_sheet(worksheet: Worksheet) -> list[Issue]:
     if worksheet.sheet_state == "visible":
         return []
 
+    # Check if sheet is empty or has content
+    has_content = any(
+        cell.value is not None
+        for row in worksheet.iter_rows()
+        for cell in row
+    )
+
+    severity = "high" if has_content else "medium"
+    desc_extra = (
+        " and contains data or formulas"
+        if has_content
+        else " but appears empty or metadata-only"
+    )
+
     return [
         _issue(
-            severity="high",
+            severity=severity,
             sheet=worksheet.title,
             cell="",
             category="Hidden Content",
             title="Hidden worksheet detected",
-            description=f"Worksheet '{worksheet.title}' is marked as {worksheet.sheet_state}.",
-            why_it_matters="Hidden worksheets can contain assumptions, calculations, or overrides that materially affect model outputs but are easy to miss during review.",
-            suggested_fix="Unhide the sheet and document whether it is required, archival, or safe to remove.",
+            description=(
+                f"Worksheet '{worksheet.title}' is marked as {worksheet.sheet_state}"
+                f"{desc_extra}."
+            ),
+            why_it_matters=(
+                "Hidden worksheets can contain assumptions, calculations, or overrides "
+                "that materially affect model outputs but are easy to miss during review."
+            ),
+            suggested_fix=(
+                "Unhide the sheet and document whether it is required, archival, "
+                "or safe to remove."
+            ),
         )
     ]
 
@@ -84,38 +111,97 @@ def _detect_hidden_sheet(worksheet: Worksheet) -> list[Issue]:
 def _detect_hidden_rows(worksheet: Worksheet) -> list[Issue]:
     issues: list[Issue] = []
     for row_idx, dimension in worksheet.row_dimensions.items():
-        if dimension.hidden:
-            issues.append(
-                _issue(
-                    severity="medium",
-                    sheet=worksheet.title,
-                    cell=str(row_idx),
-                    category="Hidden Content",
-                    title="Hidden row detected",
-                    description=f"Row {row_idx} is hidden.",
-                    why_it_matters="Hidden rows may conceal inputs, manual adjustments, or stale calculations.",
-                    suggested_fix="Unhide the row and either validate its contents or remove it if obsolete.",
-                )
+        if not dimension.hidden:
+            continue
+
+        # Check if the row has formulas that could feed visible outputs
+        row_cells = list(
+            worksheet.iter_rows(min_row=row_idx, max_row=row_idx)
+        )
+        has_formulas = any(
+            isinstance(cell.value, str) and cell.value.startswith("=")
+            for row in row_cells
+            for cell in row
+        )
+        has_content = any(
+            cell.value is not None
+            for row in row_cells
+            for cell in row
+        )
+
+        if has_formulas:
+            severity = "high"
+            detail = "and contains formulas that may feed calculations."
+        elif has_content:
+            severity = "medium"
+            detail = "and contains values with no detected downstream impact."
+        else:
+            severity = "low"
+            detail = "but appears empty."
+
+        issues.append(
+            _issue(
+                severity=severity,
+                sheet=worksheet.title,
+                cell=str(row_idx),
+                category="Hidden Content",
+                title="Hidden row detected",
+                description=f"Row {row_idx} is hidden {detail}",
+                why_it_matters=(
+                    "Hidden rows may conceal inputs, manual adjustments, or stale calculations."
+                ),
+                suggested_fix=(
+                    "Unhide the row and either validate its contents or remove it if obsolete."
+                ),
             )
+        )
     return issues
 
 
 def _detect_hidden_columns(worksheet: Worksheet) -> list[Issue]:
     issues: list[Issue] = []
     for col_key, dimension in worksheet.column_dimensions.items():
-        if dimension.hidden:
-            issues.append(
-                _issue(
-                    severity="medium",
-                    sheet=worksheet.title,
-                    cell=str(col_key),
-                    category="Hidden Content",
-                    title="Hidden column detected",
-                    description=f"Column {col_key} is hidden.",
-                    why_it_matters="Hidden columns can obscure linked calculations, helper inputs, or manual overrides.",
-                    suggested_fix="Unhide the column and confirm whether its values are necessary and accurate.",
-                )
+        if not dimension.hidden:
+            continue
+
+        # Check if column has numeric content (forecast years, calculations)
+        col_index = _column_index(str(col_key))
+        col_cells = list(
+            worksheet.iter_cols(min_col=col_index, max_col=col_index, values_only=True)
+        )
+        flat_values = [v for col_tuple in col_cells for v in col_tuple]
+
+        has_numeric = any(
+            isinstance(v, (int, float)) for v in flat_values if v is not None
+        )
+        has_formulas = any(
+            isinstance(v, str) and v.startswith("=") for v in flat_values if v is not None
+        )
+
+        if has_formulas or has_numeric:
+            severity = "high"
+            detail = "and contains formulas or numeric data — may hide forecast years or linked calculations."
+        else:
+            severity = "medium"
+            detail = "but appears to contain only labels or metadata."
+
+        issues.append(
+            _issue(
+                severity=severity,
+                sheet=worksheet.title,
+                cell=str(col_key),
+                category="Hidden Content",
+                title="Hidden column detected",
+                description=f"Column {col_key} is hidden {detail}",
+                why_it_matters=(
+                    "Hidden columns can obscure linked calculations, helper inputs, "
+                    "or manual overrides."
+                ),
+                suggested_fix=(
+                    "Unhide the column and confirm whether its values are necessary and accurate."
+                ),
             )
+        )
     return issues
 
 
@@ -741,29 +827,274 @@ def _inconsistent_formula_issue(worksheet: Worksheet, cell: Cell, axis: str) -> 
     )
 
 
-def _score_model(breakdown: SeverityBreakdown) -> int:
-    """Weighted penalty scoring with caps to prevent noise inflation.
+def _consolidate_related(issues: list[Issue]) -> list[Issue]:
+    """Merge hardcoded constant + inconsistent formula on same cell into one finding."""
+    from collections import defaultdict
 
-    Critical findings carry heavy weight; medium/low findings are capped
-    so that formula noise doesn't destroy the score on otherwise clean models.
+    # Group by (sheet, cell)
+    by_cell: dict[tuple[str, str], list[Issue]] = defaultdict(list)
+    for issue in issues:
+        by_cell[(issue.sheet, issue.cell)].append(issue)
+
+    merged: list[Issue] = []
+    removed: set[str] = set()
+
+    for (sheet, cell), cell_issues in by_cell.items():
+        hardcoded = [i for i in cell_issues if "hardcoded" in i.title.lower() or "hardcoded" in i.category.lower()]
+        inconsistent = [i for i in cell_issues if "inconsistent" in i.title.lower() or "inconsistent" in i.category.lower()]
+
+        if hardcoded and inconsistent:
+            # Merge: keep the inconsistent as base, enrich with hardcoded info
+            hc = hardcoded[0]
+            inc = inconsistent[0]
+            merged_id = f"{hc.id}_consolidated"
+            merged.append(
+                Issue(
+                    id=merged_id,
+                    severity=_worse_severity(hc.severity, inc.severity),
+                    sheet=sheet,
+                    cell=cell,
+                    category="Formula Integrity",
+                    title="Inconsistent formula with embedded hardcoded assumption",
+                    description=(
+                        f"{inc.description} Additionally: {hc.description}"
+                    ),
+                    why_it_matters=(
+                        "This cell both breaks the formula pattern AND contains a hardcoded numeric "
+                        "assumption. Together these are a strong signal of a manual override or model error."
+                    ),
+                    suggested_fix=(
+                        "Restore the consistent formula pattern and move any required constants "
+                        "to a labeled assumptions cell."
+                    ),
+                )
+            )
+            removed.update(i.id for i in hardcoded)
+            removed.update(i.id for i in inconsistent)
+        elif hardcoded or inconsistent:
+            # If only one of the two, prefer the more specific one
+            kept = hardcoded[0] if hardcoded else inconsistent[0]
+            if kept.id not in removed:
+                merged.append(kept)
+
+    # Keep all non-merged issues
+    for issue in issues:
+        if issue.id not in removed:
+            dup_check = (issue.sheet, issue.cell)
+            if dup_check not in by_cell or not (
+                any(i.id in removed for i in by_cell[dup_check] if i.id == issue.id)
+            ):
+                if issue.id not in {m.id for m in merged}:
+                    merged.append(issue)
+
+    return merged
+
+
+def _worse_severity(a: str, b: str) -> str:
+    order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+    return a if order.get(a, 0) >= order.get(b, 0) else b
+
+
+def _score_model(issues: list[Issue], breakdown: SeverityBreakdown) -> int:
+    """Calibrated scoring with per-severity caps, category caps, and floor rules.
+
+    Base score: 100. Penalties reduce it. Floor rules set maximum ceilings.
     """
-    # Weighted penalties per severity
-    critical_penalty = breakdown.critical * 30
-    high_penalty = breakdown.high * 18
+    # ── Penalty calculation ──
+    critical_count = breakdown.critical
+    high_count = breakdown.high
+    medium_count = breakdown.medium
+    low_count = breakdown.low
 
-    # Cap medium/low — beyond 10 findings, they're likely formula noise
-    medium_effective = min(breakdown.medium, 10)
-    low_effective = min(breakdown.low, 8)
-    medium_penalty = medium_effective * 6
-    low_penalty = low_effective * 2
+    # Count formula-integrity category findings for its own cap
+    formula_noise_count = sum(1 for i in issues if i.category == "Formula Integrity")
+    # Count row-grouped findings (title contains ×N cells)
+    row_group_count = sum(1 for i in issues if "×" in i.title and "cells" in i.title)
 
-    # Remaining medium/low past caps still carry reduced weight
-    medium_overflow = max(0, breakdown.medium - 10)
-    low_overflow = max(0, breakdown.low - 8)
-    overflow_penalty = medium_overflow * 2 + low_overflow * 1
+    # Per-severity penalties (with caps)
+    critical_penalty = min(critical_count * 25, 60)
+    high_penalty = min(high_count * 12, 45)
+    medium_penalty = min(medium_count * 4, 28)
+    low_penalty = min(low_count * 1, 8)
 
-    total_penalty = critical_penalty + high_penalty + medium_penalty + low_penalty + overflow_penalty
-    return max(0, min(100, 100 - total_penalty))
+    # Category caps
+    formula_noise_penalty = min(formula_noise_count * 3, 20)
+    # Row groups: count each group once (already counted in severity), but cap total
+    row_group_excess = max(0, row_group_count - 5) * 1
+
+    total_penalty = (
+        critical_penalty
+        + high_penalty
+        + medium_penalty
+        + low_penalty
+        + row_group_excess
+    )
+
+    score = max(0, 100 - total_penalty)
+
+    # ── Floor rules ──
+    has_critical = critical_count > 0
+    has_formula_error = any(
+        i.category == "Formula Error" and i.severity == "critical" for i in issues
+    )
+    has_circular = any(i.category == "Circular Reference" for i in issues)
+    high_count_3plus = high_count >= 3
+    hidden_feeds_calc = any(
+        i.category == "Hidden Content" and i.severity in ("high", "critical")
+        for i in issues
+    )
+
+    if has_formula_error and has_circular:
+        score = min(score, 45)
+    elif has_circular:
+        score = min(score, 60)
+    elif has_critical:
+        score = min(score, 75)
+    elif high_count_3plus:
+        score = min(score, 55)
+    elif hidden_feeds_calc:
+        score = min(score, 55)
+
+    return max(0, min(100, score))
+
+
+def _build_score_explanation(
+    score: int, issues: list[Issue], breakdown: SeverityBreakdown
+) -> ScoreExplanation:
+    """Build a human-readable score explanation."""
+    if score >= 80:
+        band = "Healthy"
+    elif score >= 60:
+        band = "Mostly Sound"
+    elif score >= 40:
+        band = "Moderate Risk"
+    elif score >= 20:
+        band = "High Risk"
+    else:
+        band = "Critical Risk"
+
+    # Main drivers
+    drivers: list[str] = []
+    if breakdown.critical > 0:
+        drivers.append(f"{breakdown.critical} critical finding(s) — formula errors or data corruption")
+    if any(i.category == "Circular Reference" for i in issues):
+        drivers.append("Circular reference(s) detected — iteration-dependent output risk")
+    if breakdown.high > 0:
+        drivers.append(f"{breakdown.high} high-severity finding(s) — hidden content, business logic anomalies")
+    if breakdown.medium > 0:
+        drivers.append(f"{breakdown.medium} medium-severity finding(s) — formula integrity, assumptions")
+    if not drivers:
+        drivers.append("No significant risks detected")
+
+    # Penalty breakdown
+    penalties: dict[str, int] = {
+        "critical_weight": -25,
+        "high_weight": -12,
+        "medium_weight": -4,
+        "low_weight": -1,
+        "critical_total": min(breakdown.critical * 25, 60),
+        "high_total": min(breakdown.high * 12, 45),
+        "medium_total": min(breakdown.medium * 4, 28),
+        "low_total": min(breakdown.low * 1, 8),
+    }
+
+    # Caps applied
+    caps: list[str] = []
+    if breakdown.medium * 4 > 28:
+        caps.append(f"Medium penalty capped at -28 (actual: -{breakdown.medium * 4})")
+    if breakdown.high * 12 > 45:
+        caps.append(f"High penalty capped at -45 (actual: -{breakdown.high * 12})")
+    if breakdown.critical * 25 > 60:
+        caps.append(f"Critical penalty capped at -60 (actual: -{breakdown.critical * 25})")
+    formula_count = sum(1 for i in issues if i.category == "Formula Integrity")
+    if formula_count * 3 > 20:
+        caps.append(f"Formula noise cap applied: {formula_count} findings limited to -20")
+
+    # Floor rules applied
+    floors: list[str] = []
+    has_formula_error = any(i.category == "Formula Error" and i.severity == "critical" for i in issues)
+    has_circular = any(i.category == "Circular Reference" for i in issues)
+    if has_formula_error and has_circular:
+        floors.append("Critical formula error + circular reference → max score 45")
+    elif has_circular:
+        floors.append("Circular reference → max score 60")
+    elif breakdown.critical > 0:
+        floors.append("Critical findings → max score 75")
+    elif breakdown.high >= 3:
+        floors.append("3+ high findings → max score 55")
+
+    # Narrative
+    why_not_higher = _build_why_not_higher(issues, breakdown, caps, floors)
+    why_not_lower = _build_why_not_lower(issues, breakdown, caps)
+
+    return ScoreExplanation(
+        score=score,
+        score_band=band,
+        main_drivers=drivers,
+        penalty_breakdown=penalties,
+        caps_applied=caps,
+        floor_rules_applied=floors,
+        why_not_lower=why_not_lower,
+        why_not_higher=why_not_higher,
+    )
+
+
+def _build_why_not_higher(
+    issues: list[Issue],
+    breakdown: SeverityBreakdown,
+    caps: list[str],
+    floors: list[str],
+) -> str:
+    parts: list[str] = []
+    if breakdown.critical > 0:
+        parts.append(
+            f"{breakdown.critical} critical formula error(s) exist and must be resolved "
+            f"before the model can be considered reliable"
+        )
+    if any(i.category == "Circular Reference" for i in issues):
+        parts.append(
+            "circular references create unstable outputs that no amount of other quality "
+            "can compensate for"
+        )
+    if breakdown.high >= 3:
+        parts.append(
+            f"{breakdown.high} high-severity findings (hidden content, business logic) "
+            f"indicate structural model issues"
+        )
+    if breakdown.medium > 5:
+        parts.append(
+            f"{breakdown.medium} medium findings — while individually minor, the volume "
+            f"suggests systematic formula discipline issues"
+        )
+    if not parts:
+        parts.append("minor formula integrity findings prevent a perfect score")
+    if caps:
+        parts.append("penalty caps limited further score erosion")
+    return ". ".join(parts) + "."
+
+
+def _build_why_not_lower(
+    issues: list[Issue],
+    breakdown: SeverityBreakdown,
+    caps: list[str],
+) -> str:
+    parts: list[str] = []
+    if breakdown.critical == 0:
+        parts.append("no critical formula errors (REF, DIV/0, VALUE)")
+    if not any(i.category == "Circular Reference" for i in issues):
+        parts.append("no circular references detected")
+    if breakdown.medium < 10:
+        parts.append("medium findings are below the noise floor threshold")
+    else:
+        parts.append(
+            f"medium findings were capped ({len(caps)} caps applied) to prevent "
+            f"repeated row-level noise from dominating the score"
+        )
+    if breakdown.high < 3:
+        parts.append("fewer than 3 high-severity issues — no structural risk indicator")
+    if not parts:
+        parts.append("penalty caps prevented score collapse")
+    return ". ".join(parts) + "."
 
 
 def _summary_for(score: int, issue_count: int, breakdown: SeverityBreakdown) -> str:
