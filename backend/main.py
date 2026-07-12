@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+import time
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from audit_engine import audit_workbook
 from company_diff import build_company_diff, get_available_diff_pairs, get_demo_diff
@@ -30,6 +33,46 @@ DATABASE_PATH = BASE_DIR / "audits.db"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="ModelGuard AI Backend", version="1.0.0")
+
+# ── In-memory rate limiter (resets on restart, single-instance only) ───
+
+_RATE_LIMITS: dict[str, list[float]] = defaultdict(list)
+_RATE_WINDOW = 60  # seconds
+_UPLOAD_LIMIT = 5   # per window
+_GET_LIMIT = 60     # per window
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    # Clean old entries
+    _RATE_LIMITS[client_ip] = [t for t in _RATE_LIMITS[client_ip] if now - t < _RATE_WINDOW]
+
+    limit = _UPLOAD_LIMIT if request.method == "POST" else _GET_LIMIT
+    if len(_RATE_LIMITS[client_ip]) >= limit:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Too many requests. Please wait before retrying."},
+        )
+    _RATE_LIMITS[client_ip].append(now)
+    return await call_next(request)
+
+
+# ── Security headers middleware ──────────────────────────────────────────
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
+# ── Max upload size (10 MB) ─────────────────────────────────────────────
+
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
 
 app.add_middleware(
     CORSMiddleware,
@@ -218,6 +261,18 @@ async def upload(file: UploadFile = File(...)) -> AuditResult:
     if not file.filename or not file.filename.lower().endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="Only .xlsx files are supported.")
 
+    # Check file size before reading
+    file.file.seek(0, 2)  # seek to end
+    file_size = file.file.tell()
+    file.file.seek(0)  # reset to start
+    if file_size > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({file_size / 1024 / 1024:.1f} MB). Maximum size is 10 MB.",
+        )
+    if file_size == 0:
+        raise HTTPException(status_code=400, detail="Empty file. Upload a valid .xlsx workbook.")
+
     safe_name = Path(file.filename).name
     stored_name = f"{uuid4().hex}_{safe_name}"
     destination = UPLOAD_DIR / stored_name
@@ -236,6 +291,9 @@ async def upload(file: UploadFile = File(...)) -> AuditResult:
         raise HTTPException(status_code=500, detail=f"Failed to audit workbook: {exc}") from exc
     finally:
         await file.close()
+        # Clean up uploaded file after processing
+        if destination.exists():
+            destination.unlink(missing_ok=True)
 
 
 def _init_db() -> None:
