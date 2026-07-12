@@ -205,6 +205,13 @@ cd frontend && npm run dev
 - No authentication — demo-only deployment
 - sound MCP broken — no audio feedback on flex
 
+### Privacy & Data Handling
+- Uploaded audit results are stored client-side in sessionStorage for the demo.
+- Refreshing /results clears the displayed report.
+- Public demo should not be used with confidential client files.
+- Production deployment would require authenticated storage, retention controls, and stronger security review.
+- The backend does not permanently store uploaded workbook contents after the audit completes.
+
 ---
 
 *Built as a fintech portfolio project demonstrating full-stack engineering, financial domain knowledge, and UI/UX design.*

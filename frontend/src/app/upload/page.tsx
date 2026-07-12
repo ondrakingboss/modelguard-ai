@@ -223,6 +223,15 @@ export default function UploadPage() {
           </ul>
         </motion.div>
 
+        {/* Session storage notice */}
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }}
+          className="mt-4 text-center">
+          <p className="text-xs text-[#71717a]">
+            Results are stored temporarily in this browser tab only.
+            Refreshing the results page clears the displayed audit.
+          </p>
+        </motion.div>
+
         {file && (
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="mt-6">
             <button

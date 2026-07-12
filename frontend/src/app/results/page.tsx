@@ -66,8 +66,8 @@ export default function ResultsPage() {
         <div className="flex flex-col items-center gap-4 max-w-md text-center">
           <FileSpreadsheet className="w-8 h-8 text-[#71717a]" />
           <p className="text-[#a1a1aa]">
-            No audit result found. Results are stored temporarily in your browser.
-            Upload a workbook to see the audit report.
+            No audit result found. For privacy, uploaded results are not stored
+            permanently. Please upload the workbook again.
           </p>
           <Link href="/upload" className="text-[#22c55e] text-sm hover:underline">
             ← Go to upload
