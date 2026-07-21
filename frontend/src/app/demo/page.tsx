@@ -15,21 +15,41 @@ export default function DemoPage() {
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
 
   useEffect(() => {
-    // Check for uploaded result first
-    const cached = sessionStorage.getItem("auditResult");
-    if (cached) {
-      try {
-        setData(JSON.parse(cached));
-        setLoading(false);
-        sessionStorage.removeItem("auditResult");
-        return;
-      } catch {}
-    }
+    const controller = new AbortController();
+    let cancelled = false;
 
-    fetch(apiUrl("/api/demo"))
-      .then((r) => r.json())
-      .then(setData)
-      .finally(() => setLoading(false));
+    queueMicrotask(async () => {
+      if (cancelled) return;
+
+      const cached = sessionStorage.getItem("auditResult");
+      if (cached) {
+        try {
+          const cachedData: AuditResult = JSON.parse(cached);
+          setData(cachedData);
+          setLoading(false);
+          sessionStorage.removeItem("auditResult");
+          return;
+        } catch {
+          sessionStorage.removeItem("auditResult");
+        }
+      }
+
+      try {
+        const response = await fetch(apiUrl("/api/demo"), { signal: controller.signal });
+        if (!response.ok) throw new Error(`Demo request failed: ${response.status}`);
+        const nextData: AuditResult = await response.json();
+        if (!cancelled) setData(nextData);
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError") && !cancelled) setData(null);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, []);
 
   if (loading) {

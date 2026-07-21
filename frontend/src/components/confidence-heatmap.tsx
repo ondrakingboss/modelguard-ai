@@ -1,8 +1,7 @@
 "use client";
 
-import { Card } from "@/components/ui/card";
 import { motion } from "framer-motion";
-import { TrendingUp, Activity, PiggyBank, Landmark, Target, Info, AlertTriangle, CheckCircle2, HelpCircle } from "lucide-react";
+import { TrendingUp, Activity, PiggyBank, Landmark, Target, Info, CheckCircle2, HelpCircle } from "lucide-react";
 import { useState } from "react";
 
 interface ConfidenceCategory {

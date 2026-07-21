@@ -69,7 +69,6 @@ export default function UploadPage() {
 
   useEffect(() => {
     if (!loading) return;
-    setActiveStep(0);
     const interval = window.setInterval(() => {
       setActiveStep((step) => Math.min(step + 1, progressSteps.length - 1));
     }, 850);
@@ -93,6 +92,7 @@ export default function UploadPage() {
 
   async function handleUpload() {
     if (!file || error === "wrong-type" || error === "empty-workbook") return;
+    setActiveStep(0);
     setLoading(true);
     setError(null);
 

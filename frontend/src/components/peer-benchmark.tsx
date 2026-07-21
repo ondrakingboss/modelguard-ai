@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/card";
 import { motion } from "framer-motion";
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Tooltip } from "recharts";
 import { Target, AlertTriangle, Sparkles, CheckCircle2, ShieldAlert, Ban, Filter, ExternalLink, Info } from "lucide-react";
-import { useState, useMemo } from "react";
+import { useState } from "react";
 
 interface SourceRow {
   company: string; ticker: string; fiscal_year: string; filing_type: string;
@@ -41,7 +41,7 @@ function statusBadge(status: string) {
 
 function PercentileCard({ label, percentile, cohort, caution, excluded, tip }: { label: string; percentile: number; cohort: number; caution: number; excluded: number; tip: string }) {
   return (
-    <Card className="glass p-4 text-center relative group">
+    <Card className="glass p-4 text-center relative group" title={tip}>
       <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
         <Info className="w-3 h-3 text-[#71717a]" />
       </div>
@@ -71,15 +71,12 @@ export default function PeerBenchmark({ data }: { data: Benchmark }) {
   const sourceDetail: SourceRow[] = data.source_detail || [];
   const metricNames = [...new Set(sourceDetail.map(r => r.metric))];
 
-  const filteredRows = useMemo(() => {
-    let rows = sourceDetail;
-    if (selectedMetric) rows = rows.filter(r => r.metric === selectedMetric);
-    if (filter === "included") rows = rows.filter(r => r.inclusion_status === "included");
-    if (filter === "included_with_caution") rows = rows.filter(r => r.inclusion_status === "included_with_caution");
-    if (filter === "excluded") rows = rows.filter(r => r.inclusion_status === "excluded");
-    if (filter === "flagged") rows = rows.filter(r => !!r.quality_flag);
-    return rows;
-  }, [sourceDetail, selectedMetric, filter]);
+  let filteredRows = sourceDetail;
+  if (selectedMetric) filteredRows = filteredRows.filter(r => r.metric === selectedMetric);
+  if (filter === "included") filteredRows = filteredRows.filter(r => r.inclusion_status === "included");
+  if (filter === "included_with_caution") filteredRows = filteredRows.filter(r => r.inclusion_status === "included_with_caution");
+  if (filter === "excluded") filteredRows = filteredRows.filter(r => r.inclusion_status === "excluded");
+  if (filter === "flagged") filteredRows = filteredRows.filter(r => !!r.quality_flag);
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">

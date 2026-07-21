@@ -7,6 +7,9 @@ import {
   ShieldCheck, PieChart, Activity, Target
 } from "lucide-react";
 import EvidencePanel from "@/components/evidence-panel";
+import type { ComponentProps } from "react";
+
+type EvidenceTrail = ComponentProps<typeof EvidencePanel>["evidence"];
 
 interface Insight {
   category: string;
@@ -18,6 +21,7 @@ interface Insight {
   validation_questions: string[];
   recommended_actions: string[];
   benchmark_context: string;
+  evidence?: EvidenceTrail;
 }
 
 interface FinancialIntelligence {
@@ -34,7 +38,6 @@ interface FinancialIntelligence {
 
 function ScoreBadge({ label, score, icon }: { label: string; score: number; icon: React.ReactNode }) {
   const color = score >= 70 ? "#22c55e" : score >= 50 ? "#f59e0b" : score >= 30 ? "#f97316" : "#ef4444";
-  const bg = score >= 70 ? "rgba(34,197,94,0.1)" : score >= 50 ? "rgba(245,158,11,0.1)" : score >= 30 ? "rgba(249,115,22,0.1)" : "rgba(239,68,68,0.1)";
   return (
     <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}
       className="glass p-4 flex flex-col items-center gap-2">
@@ -146,7 +149,7 @@ export default function FinancialIntelligence({ data }: { data: FinancialIntelli
             </div>
 
             <p className="text-xs text-[#71717a] italic">{insight.benchmark_context}</p>
-            {(insight as any).evidence && <EvidencePanel evidence={(insight as any).evidence} />}
+            {insight.evidence && <EvidencePanel evidence={insight.evidence} />}
           </motion.div>
         ))}
       </div>
