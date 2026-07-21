@@ -1,11 +1,13 @@
 "use client";
 
 import { apiUrl } from "@/lib/api";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ComponentProps } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { ArrowLeft, Loader2, Cloud, Factory, Landmark, UploadCloud } from "lucide-react";
 import CompanyIntelligence from "@/components/company-intelligence";
+
+type CompanyData = ComponentProps<typeof CompanyIntelligence>["data"];
 
 const industries = [
   { id: "tech", label: "Cloud / SaaS", icon: <Cloud className="w-5 h-5" />, desc: "Multi-segment tech company" },
@@ -15,23 +17,35 @@ const industries = [
 
 export default function CompanyPage() {
   const [industry, setIndustry] = useState("tech");
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<CompanyData | null>(null);
   const [loading, setLoading] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => { fetchDemo(industry); }, [industry]);
+  useEffect(() => {
+    const controller = new AbortController();
 
-  async function fetchDemo(id: string) {
-    setLoading(true); setError(null);
-    try {
-      const res = await fetch(apiUrl(`/api/company-demo/${id}`));
-      if (res.ok) setData(await res.json());
-      else setError("Failed to load demo profile.");
-    } catch { setError("Backend connection failed."); }
-    setLoading(false);
-  }
+    async function loadDemo() {
+      setLoading(true); setError(null);
+      try {
+        const res = await fetch(apiUrl(`/api/company-demo/${industry}`), { signal: controller.signal });
+        if (res.ok) {
+          const nextData: CompanyData = await res.json();
+          setData(nextData);
+        } else {
+          setError("Failed to load demo profile.");
+        }
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) setError("Backend connection failed.");
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }
+
+    void loadDemo();
+    return () => controller.abort();
+  }, [industry]);
 
   async function handleUpload() {
     if (!file) return;
@@ -40,8 +54,11 @@ export default function CompanyPage() {
       const fd = new FormData(); fd.append("file", file);
       const res = await fetch(apiUrl("/api/analyze-company"), { method: "POST", body: fd });
       if (!res.ok) throw new Error(await res.text());
-      setData(await res.json());
-    } catch (e: any) { setError(e.message || "Upload failed"); }
+      const nextData: CompanyData = await res.json();
+      setData(nextData);
+    } catch (error: unknown) {
+      setError(error instanceof Error ? error.message : "Upload failed");
+    }
     setUploading(false);
   }
 

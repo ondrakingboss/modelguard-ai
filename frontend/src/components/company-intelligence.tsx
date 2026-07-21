@@ -55,8 +55,8 @@ function SectionHeader({ icon, title }: { icon: React.ReactNode; title: string }
   );
 }
 
-function PageRef({ ref }: { ref: string }) {
-  return <span className="text-xs text-[#71717a] italic ml-2">({ref})</span>;
+function PageRef({ pageRef }: { pageRef: string }) {
+  return <span className="text-xs text-[#71717a] italic ml-2">({pageRef})</span>;
 }
 
 export function BusinessProfileDashboard({ profile }: { profile: BusinessProfile }) {
@@ -68,7 +68,7 @@ export function BusinessProfileDashboard({ profile }: { profile: BusinessProfile
         <div className="space-y-2">
           {profile.revenue_segments.map((seg, i) => (
             <div key={i} className="flex items-center justify-between py-2 border-b border-[#27272a] last:border-0">
-              <span className="text-sm">{seg.name}<PageRef ref={seg.page_ref} /></span>
+              <span className="text-sm">{seg.name}<PageRef pageRef={seg.page_ref} /></span>
               <div className="text-right">
                 <span className="text-sm font-semibold">{seg.revenue}</span>
                 {seg.growth && <span className={`text-xs ml-2 ${seg.growth.startsWith('-') ? 'text-[#ef4444]' : 'text-[#22c55e]'}`}>{seg.growth}</span>}
@@ -106,7 +106,7 @@ export function BusinessProfileDashboard({ profile }: { profile: BusinessProfile
                   <span className="text-sm font-semibold">{risk.risk}</span>
                   <span className="text-xs px-2 py-0.5 rounded-full bg-[#f59e0b]/10 text-[#f59e0b]">{risk.category}</span>
                 </div>
-                <PageRef ref={risk.page_ref} />
+                <PageRef pageRef={risk.page_ref} />
               </div>
             </div>
           ))}
@@ -121,7 +121,7 @@ export function BusinessProfileDashboard({ profile }: { profile: BusinessProfile
             <p><span className="text-[#71717a]">Total Debt:</span> {profile.debt_structure.total_debt}</p>
             <p><span className="text-[#71717a]">Maturity:</span> {profile.debt_structure.maturity_profile}</p>
             <p><span className="text-[#71717a]">Covenants:</span> {profile.debt_structure.covenants}</p>
-            <PageRef ref={profile.debt_structure.page_ref} />
+            <PageRef pageRef={profile.debt_structure.page_ref} />
           </div>
         </Card>
 
@@ -132,7 +132,7 @@ export function BusinessProfileDashboard({ profile }: { profile: BusinessProfile
             <p><span className="text-[#71717a]">Buybacks:</span> {profile.capital_allocation.buybacks}</p>
             <p><span className="text-[#71717a]">Dividends:</span> {profile.capital_allocation.dividends}</p>
             <p><span className="text-[#71717a]">M&A:</span> {profile.capital_allocation.m_and_a}</p>
-            <PageRef ref={profile.capital_allocation.page_ref} />
+            <PageRef pageRef={profile.capital_allocation.page_ref} />
           </div>
         </Card>
 
@@ -142,7 +142,7 @@ export function BusinessProfileDashboard({ profile }: { profile: BusinessProfile
             <p><span className="text-[#71717a]">Gross Margin:</span> {profile.profitability_trends.gross_margin}</p>
             <p><span className="text-[#71717a]">Op Margin:</span> {profile.profitability_trends.operating_margin}</p>
             <p><span className="text-[#71717a]">Net Margin:</span> {profile.profitability_trends.net_margin}</p>
-            <PageRef ref={profile.profitability_trends.page_ref} />
+            <PageRef pageRef={profile.profitability_trends.page_ref} />
           </div>
         </Card>
 
@@ -152,7 +152,7 @@ export function BusinessProfileDashboard({ profile }: { profile: BusinessProfile
             <p><span className="text-[#71717a]">Operating CF:</span> {profile.cash_generation.operating_cf}</p>
             <p><span className="text-[#71717a]">Free CF:</span> {profile.cash_generation.free_cf}</p>
             <p><span className="text-[#71717a]">FCF Conversion:</span> {profile.cash_generation.fcf_conversion}</p>
-            <PageRef ref={profile.cash_generation.page_ref} />
+            <PageRef pageRef={profile.cash_generation.page_ref} />
           </div>
         </Card>
       </div>

@@ -193,10 +193,23 @@ def _fallback_saas() -> dict:
         "methodology": {"note": "Real peer data not loaded. Check data/saas_peers.csv."},
     })
 
+def _build_empty_benchmark(industry: str) -> dict:
+    """Return a properly structured empty benchmark so the frontend doesn't crash."""
+    return dict(
+        industry=industry,
+        peers=[],
+        peer_count=0,
+        metrics=[],
+        strengths=[],
+        weaknesses=[],
+        unusual=[],
+        methodology={"note": f"Real peer data not yet loaded for {industry}. Check data/ directory."},
+    )
+
 BENCHMARKS = {
     "saas": _build_saas_benchmark(),
-    "manufacturing": {},  # TODO: real data
-    "financial": {},      # TODO: real data
+    "manufacturing": _build_empty_benchmark("Manufacturing"),  # TODO: real data
+    "financial": _build_empty_benchmark("Financial Services"),  # TODO: real data
 }
 
 def get_benchmark(industry: str) -> dict:

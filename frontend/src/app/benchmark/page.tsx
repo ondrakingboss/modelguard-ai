@@ -1,11 +1,13 @@
 "use client";
 
 import { apiUrl } from "@/lib/api";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ComponentProps } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { ArrowLeft, Loader2, Cloud, Factory, Landmark } from "lucide-react";
 import PeerBenchmark from "@/components/peer-benchmark";
+
+type BenchmarkData = ComponentProps<typeof PeerBenchmark>["data"];
 
 const industries = [
   { id: "saas", label: "Cloud / SaaS", icon: <Cloud className="w-5 h-5" />, desc: "48 peer companies" },
@@ -15,19 +17,30 @@ const industries = [
 
 export default function BenchmarkPage() {
   const [industry, setIndustry] = useState("saas");
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<BenchmarkData | null>(null);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => { fetchBenchmark(industry); }, [industry]);
+  useEffect(() => {
+    const controller = new AbortController();
 
-  async function fetchBenchmark(id: string) {
-    setLoading(true);
-    try {
-      const res = await fetch(apiUrl(`/api/benchmark/${id}`));
-      if (res.ok) setData(await res.json());
-    } catch {}
-    setLoading(false);
-  }
+    async function loadBenchmark() {
+      setLoading(true);
+      try {
+        const res = await fetch(apiUrl(`/api/benchmark/${industry}`), { signal: controller.signal });
+        if (res.ok) {
+          const nextData: BenchmarkData = await res.json();
+          setData(nextData);
+        }
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) setData(null);
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }
+
+    void loadBenchmark();
+    return () => controller.abort();
+  }, [industry]);
 
   return (
     <main className="min-h-screen max-w-5xl mx-auto px-6 py-8">

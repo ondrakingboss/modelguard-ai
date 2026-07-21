@@ -1,11 +1,13 @@
 "use client";
 
 import { apiUrl } from "@/lib/api";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ComponentProps } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { ArrowLeft, Loader2, GitCompare, Cloud, Factory, Landmark } from "lucide-react";
 import CompanyDiffView from "@/components/company-diff";
+
+type CompanyDiffData = ComponentProps<typeof CompanyDiffView>["data"];
 
 const pairs = [
   { id: "tech_growth", label: "Tech — Growth Trajectory", icon: <Cloud className="w-5 h-5" />, desc: "SaaS company across two fiscal years" },
@@ -15,19 +17,30 @@ const pairs = [
 
 export default function DiffPage() {
   const [pair, setPair] = useState("tech_growth");
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<CompanyDiffData | null>(null);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => { fetchDiff(pair); }, [pair]);
+  useEffect(() => {
+    const controller = new AbortController();
 
-  async function fetchDiff(id: string) {
-    setLoading(true);
-    try {
-      const res = await fetch(apiUrl(`/api/demo-diff/${id}`));
-      if (res.ok) setData(await res.json());
-    } catch {}
-    setLoading(false);
-  }
+    async function loadDiff() {
+      setLoading(true);
+      try {
+        const res = await fetch(apiUrl(`/api/demo-diff/${pair}`), { signal: controller.signal });
+        if (res.ok) {
+          const nextData: CompanyDiffData = await res.json();
+          setData(nextData);
+        }
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) setData(null);
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }
+
+    void loadDiff();
+    return () => controller.abort();
+  }, [pair]);
 
   return (
     <main className="min-h-screen max-w-5xl mx-auto px-6 py-8">

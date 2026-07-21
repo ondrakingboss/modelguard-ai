@@ -1,11 +1,13 @@
 "use client";
 
 import { apiUrl } from "@/lib/api";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ComponentProps } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { ArrowLeft, Loader2, Building2, Factory, Cloud, ShoppingBag, AlertTriangle } from "lucide-react";
 import FinancialIntelligence from "@/components/financial-intelligence";
+
+type AnalysisData = ComponentProps<typeof FinancialIntelligence>["data"];
 
 const scenarios = [
   { id: "startup", label: "High-Growth Startup", icon: <Building2 className="w-5 h-5" />, desc: "SaaS, burning cash, Series B" },
@@ -17,19 +19,30 @@ const scenarios = [
 
 export default function AnalyzePage() {
   const [scenario, setScenario] = useState("startup");
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<AnalysisData | null>(null);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => { fetchAnalysis(scenario); }, [scenario]);
+  useEffect(() => {
+    const controller = new AbortController();
 
-  async function fetchAnalysis(id: string) {
-    setLoading(true);
-    try {
-      const res = await fetch(apiUrl(`/api/analyze/${id}`));
-      if (res.ok) setData(await res.json());
-    } catch {}
-    setLoading(false);
-  }
+    async function loadAnalysis() {
+      setLoading(true);
+      try {
+        const res = await fetch(apiUrl(`/api/analyze/${scenario}`), { signal: controller.signal });
+        if (res.ok) {
+          const nextData: AnalysisData = await res.json();
+          setData(nextData);
+        }
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) setData(null);
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }
+
+    void loadAnalysis();
+    return () => controller.abort();
+  }, [scenario]);
 
   return (
     <main className="min-h-screen max-w-5xl mx-auto px-6 py-8">

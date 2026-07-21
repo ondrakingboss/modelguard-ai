@@ -16,23 +16,30 @@ export default function ResultsPage() {
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
 
   useEffect(() => {
-    const cached = sessionStorage.getItem("auditResult");
-    const cachedName = sessionStorage.getItem("auditFilename");
+    let cancelled = false;
 
-    if (cached && cachedName) {
-      try {
-        setData(JSON.parse(cached));
-        setFilename(cachedName);
-        setLoading(false);
-        return;
-      } catch {
-        setError("Failed to parse audit result. The response may be malformed.");
-        setLoading(false);
-        return;
+    queueMicrotask(() => {
+      if (cancelled) return;
+
+      const cached = sessionStorage.getItem("auditResult");
+      const cachedName = sessionStorage.getItem("auditFilename");
+
+      if (cached && cachedName) {
+        try {
+          const cachedData: AuditResult = JSON.parse(cached);
+          setData(cachedData);
+          setFilename(cachedName);
+        } catch {
+          setError("Failed to parse audit result. The response may be malformed.");
+        }
       }
-    }
 
-    setLoading(false);
+      setLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   if (loading) {

@@ -5,6 +5,7 @@ import shutil
 import sqlite3
 import time
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -32,7 +33,14 @@ DATABASE_PATH = BASE_DIR / "audits.db"
 
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-app = FastAPI(title="ModelGuard AI Backend", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    _init_db()
+    yield
+
+
+app = FastAPI(title="ModelGuard AI Backend", version="1.0.0", lifespan=lifespan)
 
 # ── In-memory rate limiter (resets on restart, single-instance only) ───
 
@@ -86,11 +94,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-def startup() -> None:
-    _init_db()
 
 
 @app.get("/", response_model=HealthCheck)
