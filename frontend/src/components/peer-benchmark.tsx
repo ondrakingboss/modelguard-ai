@@ -3,7 +3,7 @@
 import { Card } from "@/components/ui/card";
 import { motion } from "framer-motion";
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Tooltip } from "recharts";
-import { TrendingUp, Target, AlertTriangle, Sparkles, CheckCircle2, ShieldAlert, Ban, Filter, ExternalLink, Info } from "lucide-react";
+import { Target, AlertTriangle, Sparkles, CheckCircle2, ShieldAlert, Ban, Filter, ExternalLink, Info } from "lucide-react";
 import { useState, useMemo } from "react";
 
 interface SourceRow {
