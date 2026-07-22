@@ -82,6 +82,25 @@ async def security_headers_middleware(request: Request, call_next):
 
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
 
+
+def _validate_upload(file: UploadFile, suffix: str) -> None:
+    if not file.filename or not file.filename.lower().endswith(suffix):
+        raise HTTPException(status_code=400, detail=f"Only {suffix} files are supported.")
+
+    file.file.seek(0, 2)
+    file_size = file.file.tell()
+    file.file.seek(0)
+    if file_size > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({file_size / 1024 / 1024:.1f} MB). Maximum size is 10 MB.",
+        )
+    if file_size == 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Empty file. Upload a valid {suffix} file.",
+        )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -197,14 +216,13 @@ def analyze(scenario: str) -> dict:
 
 @app.post("/api/analyze-company")
 async def analyze_company(file: UploadFile = File(...)) -> dict:
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only .pdf files are supported.")
-
-    safe_name = Path(file.filename).name
-    stored_name = f"{uuid4().hex}_{safe_name}"
-    destination = UPLOAD_DIR / stored_name
+    destination: Path | None = None
 
     try:
+        _validate_upload(file, ".pdf")
+        safe_name = Path(file.filename).name
+        stored_name = f"{uuid4().hex}_{safe_name}"
+        destination = UPLOAD_DIR / stored_name
         with destination.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
@@ -214,27 +232,30 @@ async def analyze_company(file: UploadFile = File(...)) -> dict:
             "financial_data": extract_financial_data(destination),
         }
         return build_company_profile(parsed_pdf)
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to analyze company PDF: {exc}") from exc
     finally:
         await file.close()
-        destination.unlink(missing_ok=True)
+        if destination is not None:
+            destination.unlink(missing_ok=True)
 
 
 @app.post("/api/company-diff")
 async def company_diff(file_a: UploadFile = File(...), file_b: UploadFile = File(...)) -> dict:
-    for file in (file_a, file_b):
-        if not file.filename or not file.filename.lower().endswith(".pdf"):
-            raise HTTPException(status_code=400, detail="Only .pdf files are supported.")
-
-    safe_name_a = Path(file_a.filename).name
-    safe_name_b = Path(file_b.filename).name
-    destination_a = UPLOAD_DIR / f"{uuid4().hex}_{safe_name_a}"
-    destination_b = UPLOAD_DIR / f"{uuid4().hex}_{safe_name_b}"
+    destination_a: Path | None = None
+    destination_b: Path | None = None
 
     try:
+        _validate_upload(file_a, ".pdf")
+        _validate_upload(file_b, ".pdf")
+        safe_name_a = Path(file_a.filename).name
+        safe_name_b = Path(file_b.filename).name
+        destination_a = UPLOAD_DIR / f"{uuid4().hex}_{safe_name_a}"
+        destination_b = UPLOAD_DIR / f"{uuid4().hex}_{safe_name_b}"
         with destination_a.open("wb") as buffer:
             shutil.copyfileobj(file_a.file, buffer)
         with destination_b.open("wb") as buffer:
@@ -251,6 +272,8 @@ async def company_diff(file_a: UploadFile = File(...), file_b: UploadFile = File
             "financial_data": extract_financial_data(destination_b),
         }
         return build_company_diff(parsed_a, parsed_b)
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -258,8 +281,10 @@ async def company_diff(file_a: UploadFile = File(...), file_b: UploadFile = File
     finally:
         await file_a.close()
         await file_b.close()
-        destination_a.unlink(missing_ok=True)
-        destination_b.unlink(missing_ok=True)
+        if destination_a is not None:
+            destination_a.unlink(missing_ok=True)
+        if destination_b is not None:
+            destination_b.unlink(missing_ok=True)
 
 
 @app.post("/api/upload", response_model=AuditResult)
