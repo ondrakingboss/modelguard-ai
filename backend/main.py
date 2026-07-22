@@ -13,6 +13,7 @@ from uuid import uuid4
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from audit_engine import audit_workbook
 from company_diff import build_company_diff, get_available_diff_pairs, get_demo_diff
@@ -81,6 +82,61 @@ async def security_headers_middleware(request: Request, call_next):
 # ── Max upload size (10 MB) ─────────────────────────────────────────────
 
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_REQUEST_BODY_SIZE = MAX_UPLOAD_SIZE + 1024 * 1024  # multipart envelope allowance
+UPLOAD_PATHS = frozenset({"/api/analyze-company", "/api/company-diff", "/api/upload"})
+
+
+class _RequestTooLarge(Exception):
+    pass
+
+
+class RequestSizeLimitMiddleware:
+    def __init__(self, app: ASGIApp, max_bytes: int, paths: frozenset[str]) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+        self.paths = paths
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope["type"] != "http"
+            or scope.get("method") != "POST"
+            or scope.get("path") not in self.paths
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers", []))
+        try:
+            content_length = int(headers.get(b"content-length", b""))
+        except ValueError:
+            content_length = None
+        if content_length is not None and content_length > self.max_bytes:
+            await self._reject(scope, receive, send)
+            return
+
+        bytes_received = 0
+
+        async def limited_receive() -> Message:
+            nonlocal bytes_received
+            message = await receive()
+            if message["type"] == "http.request":
+                bytes_received += len(message.get("body", b""))
+                if bytes_received > self.max_bytes:
+                    raise _RequestTooLarge
+            return message
+
+        try:
+            await self.app(scope, limited_receive, send)
+        except _RequestTooLarge:
+            await self._reject(scope, receive, send)
+
+    @staticmethod
+    async def _reject(scope: Scope, receive: Receive, send: Send) -> None:
+        response = JSONResponse(
+            status_code=413,
+            content={"detail": "Request body exceeds the upload limit."},
+        )
+        await response(scope, receive, send)
 
 
 def _validate_upload(file: UploadFile, suffix: str) -> None:
@@ -100,6 +156,13 @@ def _validate_upload(file: UploadFile, suffix: str) -> None:
             status_code=400,
             detail=f"Empty file. Upload a valid {suffix} file.",
         )
+
+
+app.add_middleware(
+    RequestSizeLimitMiddleware,
+    max_bytes=MAX_REQUEST_BODY_SIZE,
+    paths=UPLOAD_PATHS,
+)
 
 app.add_middleware(
     CORSMiddleware,
