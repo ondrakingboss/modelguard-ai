@@ -88,8 +88,8 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "https://modelguard-ai.vercel.app",
-        "https://*.vercel.app",  # preview deployments
     ],
+    allow_origin_regex=r"^https://modelguard-ai(?:-[a-z0-9-]+)*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
