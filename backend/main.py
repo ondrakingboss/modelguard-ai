@@ -220,6 +220,7 @@ async def analyze_company(file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=500, detail=f"Failed to analyze company PDF: {exc}") from exc
     finally:
         await file.close()
+        destination.unlink(missing_ok=True)
 
 
 @app.post("/api/company-diff")
@@ -257,6 +258,8 @@ async def company_diff(file_a: UploadFile = File(...), file_b: UploadFile = File
     finally:
         await file_a.close()
         await file_b.close()
+        destination_a.unlink(missing_ok=True)
+        destination_b.unlink(missing_ok=True)
 
 
 @app.post("/api/upload", response_model=AuditResult)
