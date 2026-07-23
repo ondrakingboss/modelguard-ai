@@ -180,6 +180,22 @@ cd backend
 ```
 CORS configured in main.py — update `allow_origins` with production frontend URL.
 
+#### Rate limiting behind proxies
+
+The in-memory limiter trusts `request.client.host` by default and ignores raw
+`X-Forwarded-For` values from untrusted peers. If you operate behind a proxy
+whose source network you control, set `MODEL_GUARD_TRUSTED_PROXY_CIDRS` to a
+comma-separated CIDR allowlist, for example:
+
+```bash
+MODEL_GUARD_TRUSTED_PROXY_CIDRS=10.0.0.0/8,2001:db8:1234::/48
+```
+
+Do not use a universal trust value such as `*`. Uvicorn proxy-header trust
+should be configured consistently with `--forwarded-allow-ips` or the
+`FORWARDED_ALLOW_IPS` environment variable. The local limiter is bounded and
+single-instance; use a shared external limiter before horizontally scaling.
+
 ### Local Development
 ```bash
 # Backend

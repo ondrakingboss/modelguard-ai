@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
 import time
-from collections import defaultdict
+from collections import OrderedDict, deque
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from ipaddress import IPv4Network, IPv6Network, ip_address, ip_network
+from math import ceil
 from pathlib import Path
 from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
@@ -47,26 +50,118 @@ app = FastAPI(title="ModelGuard AI Backend", version="1.0.0", lifespan=lifespan)
 
 # ── In-memory rate limiter (resets on restart, single-instance only) ───
 
-_RATE_LIMITS: dict[str, list[float]] = defaultdict(list)
-_RATE_WINDOW = 60  # seconds
-_UPLOAD_LIMIT = 5   # per window
-_GET_LIMIT = 60     # per window
+IPNetwork = IPv4Network | IPv6Network
+_RATE_WINDOW = 60
+_UPLOAD_LIMIT = 5
+_GET_LIMIT = 60
+_MAX_RATE_LIMIT_BUCKETS = 10_000
+
+
+def _parse_trusted_proxy_networks(value: str) -> tuple[IPNetwork, ...]:
+    networks = []
+    for item in value.split(","):
+        cidr = item.strip()
+        if cidr:
+            networks.append(ip_network(cidr, strict=False))
+    return tuple(networks)
+
+
+_TRUSTED_PROXY_NETWORKS = _parse_trusted_proxy_networks(
+    os.getenv("MODEL_GUARD_TRUSTED_PROXY_CIDRS", "")
+)
+
+
+def _is_trusted_proxy(address: str, networks: tuple[IPNetwork, ...]) -> bool:
+    try:
+        parsed = ip_address(address)
+    except ValueError:
+        return False
+    return any(parsed in network for network in networks)
+
+
+def _resolve_client_ip(
+    direct_host: str,
+    forwarded_for: str | None,
+    trusted_proxy_networks: tuple[IPNetwork, ...],
+) -> str:
+    try:
+        normalized_direct = str(ip_address(direct_host))
+    except ValueError:
+        return direct_host
+
+    if not _is_trusted_proxy(normalized_direct, trusted_proxy_networks):
+        return normalized_direct
+    if not forwarded_for:
+        return normalized_direct
+
+    forwarded_addresses = []
+    for value in forwarded_for.split(","):
+        try:
+            forwarded_addresses.append(ip_address(value.strip()))
+        except ValueError:
+            return normalized_direct
+
+    for candidate in reversed(forwarded_addresses):
+        if not any(candidate in network for network in trusted_proxy_networks):
+            return str(candidate)
+    return normalized_direct
+
+
+class InMemoryRateLimiter:
+    def __init__(self, window_seconds: int, max_buckets: int) -> None:
+        if window_seconds <= 0 or max_buckets <= 0:
+            raise ValueError("Rate limiter bounds must be positive.")
+        self.window_seconds = window_seconds
+        self.max_buckets = max_buckets
+        self._requests: OrderedDict[tuple[str, str], deque[float]] = OrderedDict()
+
+    @property
+    def tracked_buckets(self) -> int:
+        return len(self._requests)
+
+    def check(
+        self,
+        bucket: tuple[str, str],
+        limit: int,
+        *,
+        now: float | None = None,
+    ) -> int | None:
+        timestamp = time.monotonic() if now is None else now
+        requests = self._requests.pop(bucket, deque())
+        cutoff = timestamp - self.window_seconds
+        while requests and requests[0] <= cutoff:
+            requests.popleft()
+
+        self._requests[bucket] = requests
+        if len(requests) >= limit:
+            return max(1, ceil(self.window_seconds - (timestamp - requests[0])))
+
+        requests.append(timestamp)
+        while len(self._requests) > self.max_buckets:
+            self._requests.popitem(last=False)
+        return None
+
+
+_RATE_LIMITER = InMemoryRateLimiter(_RATE_WINDOW, _MAX_RATE_LIMIT_BUCKETS)
 
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    client_ip = request.client.host if request.client else "unknown"
-    now = time.time()
-    # Clean old entries
-    _RATE_LIMITS[client_ip] = [t for t in _RATE_LIMITS[client_ip] if now - t < _RATE_WINDOW]
-
-    limit = _UPLOAD_LIMIT if request.method == "POST" else _GET_LIMIT
-    if len(_RATE_LIMITS[client_ip]) >= limit:
+    direct_host = request.client.host if request.client else "unknown"
+    client_ip = _resolve_client_ip(
+        direct_host,
+        request.headers.get("x-forwarded-for"),
+        _TRUSTED_PROXY_NETWORKS,
+    )
+    bucket_type = "write" if request.method == "POST" else "read"
+    limit = _UPLOAD_LIMIT if bucket_type == "write" else _GET_LIMIT
+    retry_after = _RATE_LIMITER.check((bucket_type, client_ip), limit)
+    if retry_after is not None:
         return JSONResponse(
             status_code=429,
             content={"detail": "Too many requests. Please wait before retrying."},
+            headers={"Retry-After": str(retry_after)},
         )
-    _RATE_LIMITS[client_ip].append(now)
     return await call_next(request)
 
 
