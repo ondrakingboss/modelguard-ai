@@ -92,6 +92,11 @@ UPLOAD_BODY_LIMITS = {
     "/api/upload": MAX_REQUEST_BODY_SIZE,
 }
 XLSX_REQUIRED_MEMBERS = frozenset({"[Content_Types].xml", "xl/workbook.xml"})
+# Central-directory-only limits keep archive validation cheap and pre-parser.
+MAX_XLSX_ARCHIVE_MEMBERS = 2_000
+MAX_XLSX_TOTAL_UNCOMPRESSED_SIZE = 50 * 1024 * 1024
+MAX_XLSX_MEMBER_UNCOMPRESSED_SIZE = 25 * 1024 * 1024
+MAX_XLSX_COMPRESSION_RATIO = 500
 
 
 class _RequestTooLarge(Exception):
@@ -160,14 +165,14 @@ def _validate_upload(file: UploadFile, suffix: str) -> None:
             status_code=400,
             detail=f"Empty file. Upload a valid {suffix} file.",
         )
-    if not _has_valid_signature(file, suffix):
+    if not _has_valid_file_structure(file, suffix):
         raise HTTPException(
             status_code=400,
             detail=f"Invalid {suffix} file contents.",
         )
 
 
-def _has_valid_signature(file: UploadFile, suffix: str) -> bool:
+def _has_valid_file_structure(file: UploadFile, suffix: str) -> bool:
     file.file.seek(0)
     try:
         if suffix == ".pdf":
@@ -175,7 +180,28 @@ def _has_valid_signature(file: UploadFile, suffix: str) -> bool:
         if suffix == ".xlsx":
             try:
                 with ZipFile(file.file) as archive:
-                    return XLSX_REQUIRED_MEMBERS.issubset(archive.namelist())
+                    members = archive.infolist()
+                    if len(members) > MAX_XLSX_ARCHIVE_MEMBERS:
+                        return False
+                    if not XLSX_REQUIRED_MEMBERS.issubset(
+                        member.filename for member in members
+                    ):
+                        return False
+
+                    total_size = 0
+                    for member in members:
+                        total_size += member.file_size
+                        if total_size > MAX_XLSX_TOTAL_UNCOMPRESSED_SIZE:
+                            return False
+                        if member.file_size > MAX_XLSX_MEMBER_UNCOMPRESSED_SIZE:
+                            return False
+                        if member.file_size and (
+                            member.compress_size == 0
+                            or member.file_size
+                            > member.compress_size * MAX_XLSX_COMPRESSION_RATIO
+                        ):
+                            return False
+                    return True
             except (BadZipFile, OSError):
                 return False
         raise ValueError(f"Unsupported upload suffix: {suffix}")
