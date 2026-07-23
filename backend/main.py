@@ -5,6 +5,7 @@ import shutil
 import sqlite3
 import time
 from collections import defaultdict
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -83,7 +84,12 @@ async def security_headers_middleware(request: Request, call_next):
 
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
 MAX_REQUEST_BODY_SIZE = MAX_UPLOAD_SIZE + 1024 * 1024  # multipart envelope allowance
-UPLOAD_PATHS = frozenset({"/api/analyze-company", "/api/company-diff", "/api/upload"})
+MAX_DIFF_REQUEST_BODY_SIZE = (2 * MAX_UPLOAD_SIZE) + 1024 * 1024
+UPLOAD_BODY_LIMITS = {
+    "/api/analyze-company": MAX_REQUEST_BODY_SIZE,
+    "/api/company-diff": MAX_DIFF_REQUEST_BODY_SIZE,
+    "/api/upload": MAX_REQUEST_BODY_SIZE,
+}
 
 
 class _RequestTooLarge(Exception):
@@ -91,17 +97,13 @@ class _RequestTooLarge(Exception):
 
 
 class RequestSizeLimitMiddleware:
-    def __init__(self, app: ASGIApp, max_bytes: int, paths: frozenset[str]) -> None:
+    def __init__(self, app: ASGIApp, limits_by_path: Mapping[str, int]) -> None:
         self.app = app
-        self.max_bytes = max_bytes
-        self.paths = paths
+        self.limits_by_path = limits_by_path
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if (
-            scope["type"] != "http"
-            or scope.get("method") != "POST"
-            or scope.get("path") not in self.paths
-        ):
+        max_bytes = self.limits_by_path.get(scope.get("path", ""))
+        if scope["type"] != "http" or scope.get("method") != "POST" or max_bytes is None:
             await self.app(scope, receive, send)
             return
 
@@ -110,7 +112,7 @@ class RequestSizeLimitMiddleware:
             content_length = int(headers.get(b"content-length", b""))
         except ValueError:
             content_length = None
-        if content_length is not None and content_length > self.max_bytes:
+        if content_length is not None and content_length > max_bytes:
             await self._reject(scope, receive, send)
             return
 
@@ -121,7 +123,7 @@ class RequestSizeLimitMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 bytes_received += len(message.get("body", b""))
-                if bytes_received > self.max_bytes:
+                if bytes_received > max_bytes:
                     raise _RequestTooLarge
             return message
 
@@ -160,8 +162,7 @@ def _validate_upload(file: UploadFile, suffix: str) -> None:
 
 app.add_middleware(
     RequestSizeLimitMiddleware,
-    max_bytes=MAX_REQUEST_BODY_SIZE,
-    paths=UPLOAD_PATHS,
+    limits_by_path=UPLOAD_BODY_LIMITS,
 )
 
 app.add_middleware(

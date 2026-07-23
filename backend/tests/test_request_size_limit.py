@@ -2,7 +2,12 @@ import asyncio
 
 import pytest
 
-from main import MAX_REQUEST_BODY_SIZE, UPLOAD_PATHS, RequestSizeLimitMiddleware
+from main import (
+    MAX_DIFF_REQUEST_BODY_SIZE,
+    MAX_REQUEST_BODY_SIZE,
+    UPLOAD_BODY_LIMITS,
+    RequestSizeLimitMiddleware,
+)
 
 
 def _scope(path: str, content_length: int | None = None) -> dict:
@@ -54,8 +59,7 @@ def _run(path: str, chunks: list[bytes], content_length: int | None = None):
 
     middleware = RequestSizeLimitMiddleware(
         _consume_body,
-        max_bytes=MAX_REQUEST_BODY_SIZE,
-        paths=UPLOAD_PATHS,
+        limits_by_path=UPLOAD_BODY_LIMITS,
     )
     asyncio.run(middleware(_scope(path, content_length), receive, send))
     response_start = next(
@@ -64,35 +68,55 @@ def _run(path: str, chunks: list[bytes], content_length: int | None = None):
     return response_start["status"], receive_calls
 
 
-@pytest.mark.parametrize("path", sorted(UPLOAD_PATHS))
-def test_rejects_oversized_content_length_without_reading_body(path: str) -> None:
+@pytest.mark.parametrize("path, limit", sorted(UPLOAD_BODY_LIMITS.items()))
+def test_rejects_oversized_content_length_without_reading_body(
+    path: str, limit: int,
+) -> None:
     status, receive_calls = _run(
         path,
         [b"not read"],
-        content_length=MAX_REQUEST_BODY_SIZE + 1,
+        content_length=limit + 1,
     )
 
     assert status == 413
     assert receive_calls == 0
 
 
-def test_rejects_streamed_body_when_cumulative_bytes_exceed_limit() -> None:
+@pytest.mark.parametrize("path, limit", sorted(UPLOAD_BODY_LIMITS.items()))
+def test_rejects_streamed_body_when_cumulative_bytes_exceed_limit(
+    path: str, limit: int,
+) -> None:
     status, receive_calls = _run(
-        "/api/upload",
-        [b"x" * MAX_REQUEST_BODY_SIZE, b"x"],
+        path,
+        [b"x" * limit, b"x"],
     )
 
     assert status == 413
     assert receive_calls == 2
 
 
-def test_allows_upload_body_at_exact_limit() -> None:
+@pytest.mark.parametrize("path, limit", sorted(UPLOAD_BODY_LIMITS.items()))
+def test_allows_upload_body_at_exact_limit(path: str, limit: int) -> None:
     status, receive_calls = _run(
-        "/api/upload",
-        [b"x" * MAX_REQUEST_BODY_SIZE],
-        content_length=MAX_REQUEST_BODY_SIZE,
+        path,
+        [b"x" * limit],
+        content_length=limit,
     )
 
+    assert status == 204
+    assert receive_calls == 1
+
+
+def test_company_diff_allows_body_above_single_upload_limit() -> None:
+    body_size = MAX_REQUEST_BODY_SIZE + 1
+
+    status, receive_calls = _run(
+        "/api/company-diff",
+        [b"x" * body_size],
+        content_length=body_size,
+    )
+
+    assert body_size < MAX_DIFF_REQUEST_BODY_SIZE
     assert status == 204
     assert receive_calls == 1
 
