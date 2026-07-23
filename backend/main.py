@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
+from zipfile import BadZipFile, ZipFile
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -90,6 +91,7 @@ UPLOAD_BODY_LIMITS = {
     "/api/company-diff": MAX_DIFF_REQUEST_BODY_SIZE,
     "/api/upload": MAX_REQUEST_BODY_SIZE,
 }
+XLSX_REQUIRED_MEMBERS = frozenset({"[Content_Types].xml", "xl/workbook.xml"})
 
 
 class _RequestTooLarge(Exception):
@@ -158,6 +160,27 @@ def _validate_upload(file: UploadFile, suffix: str) -> None:
             status_code=400,
             detail=f"Empty file. Upload a valid {suffix} file.",
         )
+    if not _has_valid_signature(file, suffix):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {suffix} file contents.",
+        )
+
+
+def _has_valid_signature(file: UploadFile, suffix: str) -> bool:
+    file.file.seek(0)
+    try:
+        if suffix == ".pdf":
+            return file.file.read(5) == b"%PDF-"
+        if suffix == ".xlsx":
+            try:
+                with ZipFile(file.file) as archive:
+                    return XLSX_REQUIRED_MEMBERS.issubset(archive.namelist())
+            except (BadZipFile, OSError):
+                return False
+        raise ValueError(f"Unsupported upload suffix: {suffix}")
+    finally:
+        file.file.seek(0)
 
 
 app.add_middleware(
@@ -353,26 +376,13 @@ async def company_diff(file_a: UploadFile = File(...), file_b: UploadFile = File
 
 @app.post("/api/upload", response_model=AuditResult)
 async def upload(file: UploadFile = File(...)) -> AuditResult:
-    if not file.filename or not file.filename.lower().endswith(".xlsx"):
-        raise HTTPException(status_code=400, detail="Only .xlsx files are supported.")
-
-    # Check file size before reading
-    file.file.seek(0, 2)  # seek to end
-    file_size = file.file.tell()
-    file.file.seek(0)  # reset to start
-    if file_size > MAX_UPLOAD_SIZE:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large ({file_size / 1024 / 1024:.1f} MB). Maximum size is 10 MB.",
-        )
-    if file_size == 0:
-        raise HTTPException(status_code=400, detail="Empty file. Upload a valid .xlsx workbook.")
-
-    safe_name = Path(file.filename).name
-    stored_name = f"{uuid4().hex}_{safe_name}"
-    destination = UPLOAD_DIR / stored_name
+    destination: Path | None = None
 
     try:
+        _validate_upload(file, ".xlsx")
+        safe_name = Path(file.filename).name
+        stored_name = f"{uuid4().hex}_{safe_name}"
+        destination = UPLOAD_DIR / stored_name
         with destination.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
@@ -386,8 +396,7 @@ async def upload(file: UploadFile = File(...)) -> AuditResult:
         raise HTTPException(status_code=500, detail=f"Failed to audit workbook: {exc}") from exc
     finally:
         await file.close()
-        # Clean up uploaded file after processing
-        if destination.exists():
+        if destination is not None:
             destination.unlink(missing_ok=True)
 
 
